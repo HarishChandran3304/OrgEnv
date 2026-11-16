@@ -26,3 +26,15 @@ Notes on reading them:
 - Opus 5.5 and Astra were called through an OpenAI-compatible API relay, recorded as
   provider `relay`. Fable 5.2 was called through Amazon Bedrock.
 - Reasoning summaries are what the model API returned; they are not the model's full reasoning.
+
+## Run notes
+
+- All three runs received the same system prompt, instruction, tool catalog and starting
+  observation, and every run ended because the model said it was finished, with no tool-call
+  or model-call budget exhausted.
+- **Opus 5.5:** one reply reached the 64,000-token output cap and was discarded; the same
+  request was sent again and answered normally (calls 26 and 27).
+- **Astra:** 21 of its 104 replies contained several tool calls in one reply. The loop accepts
+  one tool call per reply, so each was rejected with an error and no tool ran. Rejected
+  replies use a model call but not a tool call.
+- **Fable 5.2:** one request failed with a provider "Overloaded" error and was retried (call 38).

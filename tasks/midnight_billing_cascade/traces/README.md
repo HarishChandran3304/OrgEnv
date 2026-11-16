@@ -7,6 +7,7 @@ agent loop in [`../eval/agent.py`](../eval/agent.py).
 |---|---|---|---|
 | `claude-opus-5-5/` | Claude Opus 5.5 | 0.295 | no |
 | `gpt-6-astra/` | GPT-6 Astra | 0.293 | no |
+| `claude-fable-5-2/` | Claude Fable 5.2 | 0.299 | no |
 
 Each folder holds:
 
@@ -23,5 +24,5 @@ Notes on reading them:
   this repository gives the recorded reward
   (`python -m tasks.midnight_billing_cascade.eval.replay_trace`, on the unpacked rollout).
 - Opus 5.5 and Astra were called through an OpenAI-compatible API relay, recorded as
-  provider `relay`.
+  provider `relay`. Fable 5.2 was called through Amazon Bedrock.
 - Reasoning summaries are what the model API returned; they are not the model's full reasoning.

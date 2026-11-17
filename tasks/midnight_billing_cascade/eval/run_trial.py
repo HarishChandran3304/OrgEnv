@@ -42,7 +42,7 @@ def run(model, variant, seed, repeat=None):
     name = f"{model}-{EFFORT or 'default'}-{variant}-{seed}" + (f"-r{repeat}" if repeat else "")
     env = {**os.environ, "ORGENV_VARIANT_SEED": str(seed), "ORGENV_TASK_VARIANT": variant, "PYTHONPATH": str(ROOT)}
     cmd = ["harbor", "run", "-p", str(ROOT / "tasks/midnight_billing_cascade/harbor"),
-           "--agent-import-path", "tasks.midnight_billing_cascade.eval.agent:TrialAgent", "-m", model, *(["--ak", f"reasoning_effort={EFFORT}"] if EFFORT else []),
+           "--agent-import-path", "tasks.midnight_billing_cascade.eval.agent:TrialAgent", "-m", model, *(["--ak", f"effort={EFFORT}"] if EFFORT else []),  # "reasoning_effort" is a reserved Harbor agent option
            *(["--ak", f"provider={PROVIDER}"] if PROVIDER else []),
            *(["--agent-timeout-multiplier", str(AGENT_TIMEOUT_MULT)] if AGENT_TIMEOUT_MULT != 1 else []),
            "-o", str(JOBS), "--job-name", name, "-n", "1", "-r", "0", "-q"]
@@ -52,7 +52,8 @@ def run(model, variant, seed, repeat=None):
         code = proc.returncode
     except subprocess.TimeoutExpired:
         code = "runner_timeout"
-    trial = next((p for p in (JOBS / name).glob("midnight-*") if p.is_dir()), None)
+    # The trial folder's name depends on the Harbor version (task name or task folder): find it by content.
+    trial = next((p for p in sorted((JOBS / name).glob("*")) if p.is_dir() and (p / "result.json").exists()), None)
     dest = OUT / name
     dest.mkdir(parents=True, exist_ok=True)
     for src, target in (("agent/focal-rollout.json", "focal-rollout.json"), ("verifier/reward-details.json", "reward-details.json"),
@@ -65,7 +66,7 @@ def run(model, variant, seed, repeat=None):
             path.write_text(SECRET_RE.sub("[REDACTED]", text))
     details = json.loads((dest / "reward-details.json").read_text()) if (dest / "reward-details.json").exists() else {}
     record = {"job": name, "model": model, "variant": variant, "seed": seed, "repeat": repeat, "return_code": code,
-              "reward": details.get("reward"), "resolved": details.get("resolved"), "error": details.get("error")}
+              "reward": details.get("reward"), "reward_graded": details.get("reward_graded"), "resolved": details.get("resolved"), "error": details.get("error")}
     print(json.dumps(record), flush=True)
     return record
 

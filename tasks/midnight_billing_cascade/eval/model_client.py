@@ -89,4 +89,7 @@ class RecordingClient:
                 "input_tokens": sum(u["input_tokens"] for u in known) if known else None,
                 "output_tokens": sum(u["output_tokens"] for u in known) if known else None,
                 "total_tokens": sum(u["total_tokens"] for u in known) if known else None,
+                # Of input_tokens: read from the provider's prompt cache, and written to it (where reported).
+                "cache_read_input_tokens": sum(u.get("cache_read_input_tokens") or 0 for u in known) if known else None,
+                "cache_creation_input_tokens": sum(u.get("cache_creation_input_tokens") or 0 for u in known) if known else None,
                 "cost_usd": None}

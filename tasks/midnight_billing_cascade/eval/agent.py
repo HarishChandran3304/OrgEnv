@@ -1,7 +1,9 @@
 """The model-agnostic agent loop used for the published trials (a Harbor agent).
 
 One tool call per model response. Every call sends the instruction, the tool catalog, the
-current observation and the full history of earlier calls and results. The episode ends when
+full history of earlier calls and results, and the current observation, in that order and one
+part per line: each call's prompt then begins with the previous call's prompt, which is what
+lets a provider's prompt cache bill the repeated part at its cached rate. The episode ends when
 the model returns {"done": true} or a budget is exhausted: Alex cannot observe production
 truth, so there is no runtime success signal. The model SDK runs on the trusted host; neither
 credentials nor privileged task data enter the agent container.
@@ -30,6 +32,21 @@ API_RETRY_BUDGET = 12    # per episode
 # Per-response output cap, reasoning included. It must never bind: GPT-6/6.1 stayed under
 # 16,384 in 2,084 calls, but Claude at high effort exceeded it on some decisions.
 MAX_OUTPUT_TOKENS = 64000
+LAYOUT = ("Each following line is one earlier step of yours, oldest first: your decision and its result. "
+          "The last line is your current observation.")
+
+
+def render_request(instruction, catalog, history, observation):
+    """The user prompt: one JSON document per line, most stable first.
+
+    Only the last line changes between calls and earlier lines are never rewritten, so the
+    prompt of call n is a prefix of the prompt of call n+1 up to its last line. JSON never
+    contains a raw newline, so a line is exactly one part.
+    """
+    lines = [json.dumps({"instruction": instruction, "catalog": catalog, "layout": LAYOUT})]
+    lines += [json.dumps({"step": k, **entry}) for k, entry in enumerate(history, start=1)]
+    lines.append(json.dumps({"observation": observation}))
+    return "\n".join(lines)
 
 
 def parse_decision(raw):
@@ -85,18 +102,17 @@ async def run_episode(transport, client, model, instruction, save, limit=MODEL_C
     recorder = RecordingClient(client, limit + API_RETRY_BUDGET)
     history = []
     trace = {"model": model, "model_call_limit": limit, "instruction": instruction, "history": history,
-             "decisions": recorder.calls, "stop_reason": None, "loop_version": "v3-pilot-2", "api_retries": 0}
+             "decisions": recorder.calls, "stop_reason": None, "loop_version": "v4-cached-1", "api_retries": 0}
     try:
         catalog = await transport("catalog", None)
         for _ in range(limit):
             observation = await transport("observe", None)
             trace["final_observation"] = observation
-            request = {"instruction": instruction, "catalog": catalog, "observation": observation, "history": history}
             raw = None
             for attempt in range(API_RETRIES + 1):
                 try:
                     raw = await asyncio.to_thread(recorder.generate_json, model=model, system=SYSTEM,
-                                                  user=json.dumps(request), temperature=0)
+                                                  user=render_request(instruction, catalog, history, observation), temperature=0)
                     break
                 except Exception:
                     if attempt == API_RETRIES or trace["api_retries"] >= API_RETRY_BUDGET:
@@ -200,10 +216,20 @@ class ClaudeEffortClient:
                                            "transport_retries": 2},
                               "usage": None, "cost_usd": None,
                               "cost_note": "Messages usage is not an invoice; no pricing estimate configured."}
+        # One content block per line of the prompt (see render_request). A cache breakpoint on the first
+        # block covers the system prompt, the instruction and the catalog; one on the last history line
+        # covers everything already sent, so each call reads the previous call's prefix from the cache and
+        # writes only the step added since. One-hour entries: a high-effort call can generate for longer
+        # than the five-minute default, and an entry's lifetime runs from the start of the request.
+        content = [{"type": "text", "text": line + "\n"} for line in user.split("\n")]
+        if len(content) >= 2:
+            for block in {id(b): b for b in (content[0], content[-2])}.values():
+                block["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+        self.last_metadata["settings"]["prompt_cache"] = "explicit breakpoints, ttl 1h" if len(content) >= 2 else None
         try:
             with self._client.messages.stream(
                     **settings, system=[{"type": "text", "text": system}, {"type": "text", "text": "Return a JSON object."}],
-                    messages=[{"role": "user", "content": user}]) as stream:
+                    messages=[{"role": "user", "content": content}]) as stream:
                 response = stream.get_final_message()
         except Exception as exc:
             self.last_metadata.update(error_type=type(exc).__name__, error_status=getattr(exc, "status_code", None),
@@ -214,7 +240,10 @@ class ClaudeEffortClient:
         self.last_metadata.update(
             response_id=response.id, returned_model=response.model, status=response.stop_reason,
             usage={"input_tokens": n_in, "output_tokens": usage["output_tokens"],
-                   "total_tokens": n_in + usage["output_tokens"], "anthropic": usage},
+                   "total_tokens": n_in + usage["output_tokens"],
+                   "cache_read_input_tokens": usage.get("cache_read_input_tokens") or 0,
+                   "cache_creation_input_tokens": usage.get("cache_creation_input_tokens") or 0,
+                   "anthropic": usage},
             reasoning={"summary": [b.thinking for b in response.content if b.type == "thinking" and b.thinking]})
         if response.stop_reason != "end_turn":
             if response.stop_details:
@@ -239,9 +268,9 @@ class ClaudeEffortClient:
 
 
 class TrialAgent(BaseAgent):
-    def __init__(self, *args, reasoning_effort: str | None = None, provider: str | None = None, **kwargs):
+    def __init__(self, *args, effort: str | None = None, reasoning_effort: str | None = None, provider: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.reasoning_effort, self.provider = reasoning_effort, provider
+        self.reasoning_effort, self.provider = effort or reasoning_effort, provider
 
     @staticmethod
     def name():

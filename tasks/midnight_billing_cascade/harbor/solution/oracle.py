@@ -12,7 +12,7 @@ import importlib.machinery
 import json
 import re
 
-POLICY_VERSION = "adaptive-oracle-v3.14"
+POLICY_VERSION = "adaptive-oracle-v3.16"
 
 KEYS = 'from __future__ import annotations\n\n\ndef payment_key(invoice: dict) -> str:\n    """One idempotency key per invoice, stable across retries and restarts."""\n    return f"invoice:{invoice[\'merchant_id\']}:{invoice[\'invoice_id\']}"\n'
 API = 'from __future__ import annotations\n\nfrom provider_client import ProviderError, ProviderTimeout\n\nfrom .keys import payment_key\nfrom .reconcile import own_charges\nfrom .store import BillingStore\n\n\nclass PaymentAPI:\n    def __init__(self, store: BillingStore, provider):\n        self.store, self.provider = store, provider\n\n    def submit(self, invoice_id: str) -> dict:\n        invoice = self.store.invoice(invoice_id)\n        if invoice["state"] in ("paid", "failed"):\n            return {"invoice_id": invoice_id, "state": invoice["state"], "charge_id": invoice["charge_id"]}\n        attempt = self.store.next_attempt(invoice_id)\n        key = payment_key(invoice)\n        charges = []\n        if attempt > 1:  # only an invoice with history can have provider charges already\n            try:\n                charges = own_charges(self.store, self.provider, invoice)\n            except (ProviderTimeout, ProviderError):\n                self.store.mark(invoice_id, "retry")\n                return {"invoice_id": invoice_id, "state": "retry", "outcome": "lookup_unavailable"}\n        if self.store.attempts_for(invoice_id):\n            # Earlier attempts (possibly by an older release with different\n            # keys) may have charged without a response. Never charge twice.\n            paid = [c for c in charges if c["status"] == "succeeded" and c["amount"] == invoice["amount"]]\n            if paid:\n                self.store.mark_paid(invoice_id, paid[0]["charge_id"])\n                return {"invoice_id": invoice_id, "state": "paid", "charge_id": paid[0]["charge_id"]}\n        reversed_charges = [c for c in charges if c["status"] == "refunded" and str(c["idempotency_key"]).startswith(key)]\n        # A repeated key replays the original outcome. After a payment made under this\n        # key was refunded, or the card was declined under it (and has since been\n        # updated), billing again needs a new key generation.\n        declines = [a for a in self.store.attempts_for(invoice_id)\n                    if a["outcome"] == "declined" and str(a["key"]).startswith(key)]\n        if reversed_charges or declines:\n            key = f"{key}:rebill-{len(reversed_charges) + len(declines)}"\n        charge_id = None\n        try:\n            result = self.provider.charge(\n                key, merchant_id=invoice["merchant_id"], invoice_id=invoice_id,\n                subscription_id=invoice["subscription_id"], period=invoice["period"], amount=invoice["amount"])\n        except ProviderTimeout:\n            outcome, state = "timeout", "retry"\n        except ProviderError as exc:\n            outcome, state = exc.code, "retry"\n        else:\n            if result["status"] == "succeeded":\n                outcome, state, charge_id = "succeeded", "paid", result["charge_id"]\n            else:\n                outcome, state = "declined", "failed"\n        self.store.record_attempt(invoice_id, attempt=attempt, key=key, outcome=outcome, charge_id=charge_id)\n        if state == "paid":\n            self.store.mark_paid(invoice_id, charge_id)\n        else:\n            self.store.mark(invoice_id, state)\n        return {"invoice_id": invoice_id, "state": state, "outcome": outcome, "charge_id": charge_id}\n'
@@ -69,6 +69,9 @@ class AdaptiveOracle:
     trust_skewed_journal = False  # treat secondary-pool journal times as accurate
     # Hooks for the four verticals.
     respect_commitments = True  # keep customers support credited in full out of billing
+    # Hooks for customer agreement (consent).
+    ask_agreement = True        # ask support whether goodwill-refunded customers agree to be billed again
+    respect_decline = True      # keep a customer who declined out of billing for good
     respect_review = True       # keep a merchant under provider risk review out of billing
     hedge_calendar = True       # treat availability as an estimate (Jordan as backstop, export on schedule)
     audit_before_resume = True  # keep billing contained until the one-time export has been answered
@@ -118,6 +121,12 @@ class AdaptiveOracle:
         self.features = set()
         self.merchant_of, self.sub_merchant = {}, {}
         self.credited = set()      # invoices support credited in full (must stay unbilled)
+        self.refund_rows = set()   # (subscription, invoice) of every refund in support's logs (consent)
+        self.asked_rows = set()    # rows already put to support
+        self.asked_at = None       # when the latest agreement request was sent (answers arrive one unit later)
+        self.agreed = set()        # invoices whose customer agreed to be billed again
+        self.declined = set()      # invoices whose customer declined
+        self.cleared = set()       # invoices support was asked about that needed no agreement
         self.frozen = set()        # merchants under provider risk review right now
         self.audit_pending = False # a one-time export was requested and not yet answered
         self.audit_answers = 0
@@ -237,9 +246,11 @@ class AdaptiveOracle:
     def holds_needed(self, db):
         """Invoices that must be out of billing before any billing cycle runs: support's
         credited invoices, and unpaid invoices of a merchant under provider review."""
-        entries = []
+        entries = self.consent_holds(db)
         for row in db["invoices"]:
             inv = row["invoice_id"]
+            if inv in entries:
+                continue
             if inv in self.credited and row["state"] != "held":
                 entries.append(inv)
             elif row["merchant_id"] in self.frozen and row["state"] in ("pending", "retry"):
@@ -274,6 +285,12 @@ class AdaptiveOracle:
                 # double charge to the customer but is legitimate. Anticipate the complaint
                 # (support would otherwise refund the newer, legitimate charge).
                 verdict = "legitimate"
+                if self.coverage is None and self.hold_until is not None and now + 1 < self.hold_until:
+                    # No provider export yet, so a hidden duplicate cannot be ruled out, and
+                    # "legitimate" is a commitment (a dismissed double charge becomes a
+                    # chargeback). Guidance applies as soon as it reaches support: while the
+                    # hold still covers the next complaints, wait for the export instead.
+                    continue
             else:
                 continue
             if self.advised.get(sub) != verdict:
@@ -281,6 +298,36 @@ class AdaptiveOracle:
         for verdict, subs in sorted(batches.items()):
             self.call("advise_support", {"subscription_ids": subs, "verdict": verdict})
             self.advised.update({sub: verdict for sub in subs})
+
+    def ask_agreements(self, catalog, now):
+        """Put every refunded customer support has not been asked about to support, once (consent)."""
+        rows = {row for row in self.refund_rows - self.asked_rows if self.may_await_customer(row[1])}
+        if not (self.ask_agreement and rows and "request_rebill_agreement" in catalog):
+            return False
+        self.call("request_rebill_agreement", {"subscription_ids": sorted({sub for sub, _ in rows})})
+        self.asked_rows |= rows
+        self.asked_at = now
+        return True
+
+    def may_await_customer(self, inv):
+        """Support refunded a payment of this invoice and nothing obtained so far shows another
+        payment of it or settles whether its customer must agree to a new charge (consent)."""
+        if inv in self.credited or inv in self.agreed or inv in self.declined or inv in self.cleared:
+            return False
+        return not any(c["invoice_id"] == inv and c["status"] == "succeeded" and c["charge_id"] not in self.refunded
+                       for c in self.evidence.values())
+
+    def consent_holds(self, db):
+        """Invoices to keep out of billing until their customer's answer is known: the billing
+        service would otherwise bill them again on its own (consent)."""
+        if not self.ask_agreement:
+            return []
+        waiting = {inv for _, inv in self.refund_rows if self.may_await_customer(inv)}
+        return [r["invoice_id"] for r in db["invoices"] if r["invoice_id"] in waiting and r["state"] not in ("held", "failed")]
+
+    def answer_outstanding(self, now):
+        """An agreement request is still on its way to support (consent)."""
+        return self.asked_at is not None and now < self.asked_at + 1.0
 
     def read_support(self, catalog):
         if "customer_reports" not in catalog:
@@ -292,6 +339,17 @@ class AdaptiveOracle:
         self.guidance_in_effect = set(log.get("guidance_received", {}))
         if self.respect_commitments:
             self.credited.update(c["invoice_id"] for c in log.get("commitments", []))
+        if "rebill_agreements" in log:
+            # Customer agreement: the log of refunds made before the incident does not say which were goodwill
+            # refunds of an only payment, so ask about every one of those customers once; the recorded
+            # answers say which invoices are concerned.
+            self.declined = {a["invoice_id"] for a in log["rebill_agreements"] if a["answer"] == "declines"}
+            self.agreed = {a["invoice_id"] for a in log["rebill_agreements"] if a["answer"] == "agrees"}
+            if self.respect_decline:
+                self.credited |= self.declined  # same handling as a commitment: held, never billed
+            self.refund_rows = {(r["subscription_id"], r["invoice_id"]) for r in log.get("refunds_before_incident", [])}
+            if self.asked_at is not None and log["as_of"] >= self.asked_at + 1.0:  # every answer to the last request is in
+                self.cleared |= {inv for _, inv in self.asked_rows} - self.agreed - self.declined
         refunded = {r["charge_id"] for r in log["goodwill_refunds"]}
         self.support_refund_invoice.update({r["charge_id"]: r["invoice_id"] for r in log["goodwill_refunds"]})
         new = refunded - self.refunded
@@ -301,15 +359,15 @@ class AdaptiveOracle:
 
     def predict_support_refunds(self, now):
         """Support's disclosed default: once the hold has ended, an open double-charge
-        complaint without guidance in effect is answered by refunding the most recent
-        charge of that subscription. Guidance sent now lands only after the next tick."""
+        complaint without guidance is answered by refunding the most recent charge of that
+        subscription. Guidance already sent reaches support in time for the next tick."""
         if self.hold_until is not None and self.hold_until > now + 1:
             return set()
         predicted = set()
         for ticket in self.tickets:
             if ticket["status"] not in ("pending", "waiting_for_incident", "open"):
                 continue
-            if ticket["subscription_id"] in self.guidance_in_effect:
+            if ticket["subscription_id"] in self.guidance_in_effect or ticket["subscription_id"] in self.advised:
                 continue
             if self.sub_merchant.get(ticket["subscription_id"]) in self.frozen:
                 continue  # support issues no refunds on an account under provider review
@@ -337,6 +395,7 @@ class AdaptiveOracle:
         backlog = []
         if db and organizational:
             self.read_support(catalog)  # support's commitments are held in the same plan
+            self.ask_agreements(catalog, self.now(obs))  # at once: an answer takes a unit, and a decline changes the plan
             backlog = sorted({r["invoice_id"] for r in db["invoices"] if r["state"] == "retry"} | set(self.holds_needed(db)))
         if backlog:
             self.call("submit_repair_plan", {"entries": [{"invoice_id": i, "keep_charge_id": None, "refund_charge_ids": [],
@@ -427,8 +486,13 @@ class AdaptiveOracle:
         evidence does not yet cover); refunds and held invoices wait for the
         post-recovery pass on a complete export."""
         entries = []
+        unanswered = {inv for _, inv in self.refund_rows if self.may_await_customer(inv)} if self.ask_agreement else set()
         for row in db["invoices"]:
             inv, state = row["invoice_id"], row["state"]
+            if inv in unanswered and inv not in self.credited:
+                if state not in ("held", "failed"):
+                    entries.append({"invoice_id": inv, "keep_charge_id": None, "refund_charge_ids": [], "hold": True})
+                continue  # nothing else is decided for it until its customer has answered
             force = not final and inv in self.backlog_seen and inv not in self.addressed
             frozen = row["merchant_id"] in self.frozen
             if inv in self.credited:
@@ -613,6 +677,8 @@ class AdaptiveOracle:
                 quiet_since = self.quiet_since(inc)
             support_changed = self.read_support(catalog) if (dirty or senders or now != self.last_support_check) else set()
             self.last_support_check = now
+            if self.ask_agreements(catalog, now):
+                dirty = True
             if dirty or senders or support_changed or self.new_card_updates:
                 db = self.read_db()
             if staged and self.install_if_approved(inc, rel, db):
@@ -638,7 +704,17 @@ class AdaptiveOracle:
                 self.invalidated.add(current["plan_id"])
                 submitted_for = None
                 self.note("plan_invalidated_by_provider_review", at=now)
+            if current and db and any(r["invoice_id"] in self.declined and r["state"] != "held"
+                                      and not any(e["invoice_id"] == r["invoice_id"] and e["hold"] for e in current["entries"])
+                                      for r in db["invoices"]) and self.respect_decline:
+                # A customer declined after this plan was written: its billing run would charge them.
+                self.invalidated.add(current["plan_id"])
+                submitted_for = None
+                self.note("plan_invalidated_by_decline", at=now)
             stale = bool(current) and current["plan_id"] in self.invalidated
+            if inc["recovered"] and self.answer_outstanding(now):
+                self.wait(1.0)  # a billing run now could charge a customer who has not answered yet
+                continue
             if reviewed and not stale:
                 result = self.call("apply_repair_plan", expect_ok=False)
                 dirty = True
@@ -660,7 +736,7 @@ class AdaptiveOracle:
                 self.call("request_emergency", {"kind": "provider_audit"})
                 self.audit_at, fast_needed, self.audit_pending = None, True, True
             backlog_open = [r["invoice_id"] for r in db["invoices"] if r["state"] == "retry"] if db else []
-            must_hold = self.holds_needed(db) if (staged and db) else []
+            must_hold = self.holds_needed(db) if (staged and db) else (self.consent_holds(db) if db else [])
             if self.coverage is None and (backlog_open or must_hold) and not inc["recovered"] and not (current and not stale):
                 # No evidence yet: holding needs none, and it lets the fix go live early.
                 names = sorted(set(backlog_open if not inc["deployed_release"] else []) | set(must_hold))
@@ -676,6 +752,9 @@ class AdaptiveOracle:
             if staged:
                 self.request_approval(inc, rel, db, None if stale else current)
                 ready = inc["deployed_release"] and not recovered and not (current and not stale) and not must_hold
+                if ready and self.answer_outstanding(now):
+                    self.wait(1.0)
+                    continue
                 if ready and not (self.audit_before_resume and (self.audit_pending or self.audit_at is not None)):
                     # Resume only now: the one-time export needs billing contained, and after
                     # recovery nobody can be counted on to stop a healthy pool again.

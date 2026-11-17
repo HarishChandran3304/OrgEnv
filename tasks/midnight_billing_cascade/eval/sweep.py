@@ -32,7 +32,7 @@ def one(job):
         error = f"{type(exc).__name__}: {exc}"[:200]
     r = verify(episode)
     harm = r.get("harm", {})
-    return {"policy": policy, "variant": variant, "seed": seed, "reward": r["reward"], "resolved": r["resolved"],
+    return {"policy": policy, "variant": variant, "seed": seed, "reward": r["reward"], "reward_graded": r.get("reward_graded"), "resolved": r["resolved"],
             "critical": r["safety_gates"]["reasons"], "harm_rate": harm.get("harm_rate"), "harm_events": harm.get("events"),
             "failed_checks": [k for k, v in r.get("checks", {}).items() if not v],
             "invoice_failures": len(r.get("invoice_failures") or {}), "tool_calls": len(episode.calls), "sim_time": episode.now,
@@ -61,7 +61,7 @@ def main():
         zero = sum(bool(r["critical"]) for r in sub)
         mean = sum(r["reward"] for r in sub) / n
         harm = sum((r["harm_rate"] or 0) for r in sub) / n
-        print(f"{policy:28s} {v:14s} n={n:3d} resolved={resolved:3d} critical={zero:3d} mean_reward={mean:.3f} mean_harm={harm:.3f} "
+        print(f"{policy:28s} {v:14s} n={n:3d} resolved={resolved:3d} critical={zero:3d} mean_reward={mean:.3f} mean_graded={sum((r["reward_graded"] or 0) for r in sub) / n:.3f} mean_harm={harm:.3f} "
               f"min_reward={min(r['reward'] for r in sub):.3f} max_calls={max(r['tool_calls'] for r in sub)}")
         for r in sub:
             if (policy == "oracle" and not r["resolved"]) or r["verifier_error"]:

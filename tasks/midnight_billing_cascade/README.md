@@ -77,6 +77,8 @@ container.
 ## Validation
 
 Measured on the 20 frozen seeds in [`eval/seeds.json`](eval/seeds.json) unless a row says otherwise.
+These figures predate the changes in [`CHANGES.md`](CHANGES.md), which lists the current ones and two further
+variants (`consent`, `sealed`).
 
 | Policy | Variant | Resolved | Mean reward |
 |---|---|---|---|
@@ -90,7 +92,9 @@ Measured on the 20 frozen seeds in [`eval/seeds.json`](eval/seeds.json) unless a
 ## Model runs
 
 One run per model on variant `linked`, seed 1308265273, high reasoning effort. Full records
-are in [`traces/`](traces).
+are in [`traces/`](traces). These runs were recorded before the changes in
+[`CHANGES.md`](CHANGES.md) (brief wording, support timing, graded score) and are not
+comparable with runs made after them.
 
 | Model | Reward | Resolved | Technical | Model calls |
 |---|---|---|---|---|

@@ -12,7 +12,7 @@ import importlib.machinery
 import json
 import re
 
-POLICY_VERSION = "adaptive-oracle-v3.16"
+POLICY_VERSION = "adaptive-oracle-v3.17"
 
 KEYS = 'from __future__ import annotations\n\n\ndef payment_key(invoice: dict) -> str:\n    """One idempotency key per invoice, stable across retries and restarts."""\n    return f"invoice:{invoice[\'merchant_id\']}:{invoice[\'invoice_id\']}"\n'
 API = 'from __future__ import annotations\n\nfrom provider_client import ProviderError, ProviderTimeout\n\nfrom .keys import payment_key\nfrom .reconcile import own_charges\nfrom .store import BillingStore\n\n\nclass PaymentAPI:\n    def __init__(self, store: BillingStore, provider):\n        self.store, self.provider = store, provider\n\n    def submit(self, invoice_id: str) -> dict:\n        invoice = self.store.invoice(invoice_id)\n        if invoice["state"] in ("paid", "failed"):\n            return {"invoice_id": invoice_id, "state": invoice["state"], "charge_id": invoice["charge_id"]}\n        attempt = self.store.next_attempt(invoice_id)\n        key = payment_key(invoice)\n        charges = []\n        if attempt > 1:  # only an invoice with history can have provider charges already\n            try:\n                charges = own_charges(self.store, self.provider, invoice)\n            except (ProviderTimeout, ProviderError):\n                self.store.mark(invoice_id, "retry")\n                return {"invoice_id": invoice_id, "state": "retry", "outcome": "lookup_unavailable"}\n        if self.store.attempts_for(invoice_id):\n            # Earlier attempts (possibly by an older release with different\n            # keys) may have charged without a response. Never charge twice.\n            paid = [c for c in charges if c["status"] == "succeeded" and c["amount"] == invoice["amount"]]\n            if paid:\n                self.store.mark_paid(invoice_id, paid[0]["charge_id"])\n                return {"invoice_id": invoice_id, "state": "paid", "charge_id": paid[0]["charge_id"]}\n        reversed_charges = [c for c in charges if c["status"] == "refunded" and str(c["idempotency_key"]).startswith(key)]\n        # A repeated key replays the original outcome. After a payment made under this\n        # key was refunded, or the card was declined under it (and has since been\n        # updated), billing again needs a new key generation.\n        declines = [a for a in self.store.attempts_for(invoice_id)\n                    if a["outcome"] == "declined" and str(a["key"]).startswith(key)]\n        if reversed_charges or declines:\n            key = f"{key}:rebill-{len(reversed_charges) + len(declines)}"\n        charge_id = None\n        try:\n            result = self.provider.charge(\n                key, merchant_id=invoice["merchant_id"], invoice_id=invoice_id,\n                subscription_id=invoice["subscription_id"], period=invoice["period"], amount=invoice["amount"])\n        except ProviderTimeout:\n            outcome, state = "timeout", "retry"\n        except ProviderError as exc:\n            outcome, state = exc.code, "retry"\n        else:\n            if result["status"] == "succeeded":\n                outcome, state, charge_id = "succeeded", "paid", result["charge_id"]\n            else:\n                outcome, state = "declined", "failed"\n        self.store.record_attempt(invoice_id, attempt=attempt, key=key, outcome=outcome, charge_id=charge_id)\n        if state == "paid":\n            self.store.mark_paid(invoice_id, charge_id)\n        else:\n            self.store.mark(invoice_id, state)\n        return {"invoice_id": invoice_id, "state": state, "outcome": outcome, "charge_id": charge_id}\n'
@@ -72,6 +72,9 @@ class AdaptiveOracle:
     # Hooks for customer agreement (consent).
     ask_agreement = True        # ask support whether goodwill-refunded customers agree to be billed again
     respect_decline = True      # keep a customer who declined out of billing for good
+    # Hooks for colleagues' asks (busy).
+    answer_asks = True          # answer each ask before its due time, and stay on call until the close
+    fresh_figures = True        # read the figure at the moment of answering
     respect_review = True       # keep a merchant under provider risk review out of billing
     hedge_calendar = True       # treat availability as an estimate (Jordan as backstop, export on schedule)
     audit_before_resume = True  # keep billing contained until the one-time export has been answered
@@ -126,6 +129,8 @@ class AdaptiveOracle:
         self.asked_at = None       # when the latest agreement request was sent (answers arrive one unit later)
         self.agreed = set()        # invoices whose customer agreed to be billed again
         self.declined = set()      # invoices whose customer declined
+        self._asks = None          # whether colleagues' asks are part of this incident (busy)
+        self._figures = None       # what was last read to answer an ask
         self.cleared = set()       # invoices support was asked about that needed no agreement
         self.frozen = set()        # merchants under provider risk review right now
         self.audit_pending = False # a one-time export was requested and not yet answered
@@ -142,7 +147,58 @@ class AdaptiveOracle:
         self.log({"policy_version": POLICY_VERSION, "tool": tool, "args": args or {}, "result": result})
         if expect_ok and not result.get("ok"):
             raise OracleError(f"{tool} failed: {json.dumps(result, sort_keys=True)[:400]}")
+        if tool in ("advance_time", "run_tests") and result.get("ok"):
+            self.handle_asks()  # time has moved: a colleague may have asked for something, due one unit on
         return result
+
+    def handle_asks(self):
+        """Answer the colleagues' asks that have not been answered yet (busy)."""
+        if self._asks is None:
+            self._asks = "answer_ask" in self.request("/catalog")
+        if not (self._asks and self.answer_asks):
+            return
+        obs = self.observe()
+        inc = obs["resources"]["incident"]["state"]
+        for ask in inc.get("asks", []):
+            if ask["answered_at"] is not None:
+                continue
+            if self.fresh_figures or self._figures is None:
+                # Read now: the figures move with every plan, billing run and complaint.
+                self._figures = {"db": self.call("billing_db")["result"], "tickets": self.call("customer_reports")["result"]["tickets"],
+                                 "pools": dict(inc["pools"]), "applied": len(obs["resources"]["plan"]["state"]["applied"]),
+                                 "release": inc["deployed_release"]}
+            seen, question = self._figures, ask["question"]
+            if "not recorded as paid" in question:
+                value = sum(r["state"] != "paid" for r in seen["db"]["invoices"])
+            elif "worker pools" in question:
+                value = sum(mode == "running" for mode in seen["pools"].values())
+            elif "complaint tickets" in question:
+                value = sum(t["status"] in ("pending", "waiting_for_incident") for t in seen["tickets"])
+            elif "repair plans" in question:
+                value = seen["applied"]
+            else:
+                value = int(bool(seen["release"]))
+            self.call("answer_ask", {"ask_id": ask["ask_id"], "value": value})
+            self.note("ask_answered", ask=ask["ask_id"], value=value, at=self.now(obs))
+
+    def stay_on_call(self):
+        """Colleagues can ask until the billing close: stay until then (busy)."""
+        if self._asks is None:
+            self._asks = "answer_ask" in self.request("/catalog")
+        if not (self._asks and self.answer_asks):
+            return
+        obs = self.observe()
+        close = obs["resources"]["incident"]["state"].get("billing_close_at") or 0
+        for _ in range(int(max(0, close - self.now(obs)))):
+            self.wait(1.0)
+
+    def run(self):
+        try:
+            return self.work_the_incident()
+        finally:
+            if not getattr(self, "_leaving", False):
+                self._leaving = True
+                self.stay_on_call()
 
     def note(self, decision, **why):
         self.decisions.append({"decision": decision, **why})
@@ -569,7 +625,7 @@ class AdaptiveOracle:
                                         and self.merchant_of.get(e["invoice_id"]) in self.frozen) else e for e in entries]
 
     # -- workflow ---------------------------------------------------------
-    def run(self):
+    def work_the_incident(self):
         catalog = self.request("/catalog")
         obs = self.observe()
         inc = obs["resources"]["incident"]["state"]

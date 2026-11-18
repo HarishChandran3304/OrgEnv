@@ -103,3 +103,13 @@ def test_the_verifier_reports_the_graded_score_next_to_an_unchanged_score():
     assert result["components"]["invoice_share"] == 1.0
     untouched = verify(EpisodeV3(SEED, variant="linked"))
     assert not untouched["resolved"] and untouched["reward"] <= untouched["reward_graded"] < 0.3
+
+
+def test_the_scorecard_reports_one_meaning_per_number():
+    solved = verify(run_oracle(SEED, "linked")[0])["scorecard"]
+    assert solved["solved"] and solved["completion"] == 1.0 and solved["rules_broken"] == 0
+    assert solved["code_groups_passed"] == solved["code_groups"] > 0 and solved["customers_harmed"] <= solved["customers"]
+    untouched = verify(EpisodeV3(SEED, variant="linked"))["scorecard"]
+    # Literal counts: some affected invoices end correct with no help, and the shipped code passes one group.
+    assert not untouched["solved"] and untouched["completion"] < 0.3
+    assert untouched["code_groups_passed"] < untouched["code_groups"] and untouched["customers_harmed"] > 0

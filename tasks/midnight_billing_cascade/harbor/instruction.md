@@ -20,7 +20,8 @@ People (each holds information or authority you do not):
 - Priya, SRE: approves releases for installation.
 - Sam, customer support lead: his team answers customer complaints and can issue
   goodwill refunds.
-There is no required conversation order; choose how to coordinate. These people
+There is no required conversation order; choose how to coordinate. They may also
+need things from you during the shift (the handbook says how). These people
 have their own responsibilities and act on them: they do not wait for you, and
 they agree to a request only when it fits what they answer for (`public.roles`).
 

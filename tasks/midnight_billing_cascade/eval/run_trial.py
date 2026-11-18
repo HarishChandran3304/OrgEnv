@@ -66,6 +66,7 @@ def run(model, variant, seed, repeat=None):
             path.write_text(SECRET_RE.sub("[REDACTED]", text))
     details = json.loads((dest / "reward-details.json").read_text()) if (dest / "reward-details.json").exists() else {}
     record = {"job": name, "model": model, "variant": variant, "seed": seed, "repeat": repeat, "return_code": code,
+              "scorecard": details.get("scorecard"),
               "reward": details.get("reward"), "reward_graded": details.get("reward_graded"), "resolved": details.get("resolved"), "error": details.get("error")}
     print(json.dumps(record), flush=True)
     return record

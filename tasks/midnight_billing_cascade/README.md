@@ -85,8 +85,9 @@ Other orders work; what matters is the reasoning at each step.
    merchant per run to stay inside the provider's rate limit, and the per-merchant refund
    term.
 8. Run the tests and prepare a release.
-9. Tell Sam which complaints are legitimate pairs (a renewal and a proration) so they are
-   closed without a refund.
+9. Guide Sam on complaints that are legitimate pairs (a renewal and a proration) so they are
+   closed without a refund. While the hold still covers the next complaints, wait for the
+   export before calling a pair legitimate: some hide a duplicate.
 
 **t=3: ask for the evidence, and not before.**
 
@@ -112,8 +113,9 @@ Other orders work; what matters is the reasoning at each step.
 16. Keep guiding support, watch for cards updated after a decline, and check the outcome of
     each production run until the close.
 
-The reference finishes this seed with a reward of 0.983: resolved, with two customers
-charged again after support had refunded them before guidance could reach it.
+The reference finishes this seed with a reward of 1.000: resolved, with no customer harmed.
+Before the changes in [`CHANGES.md`](CHANGES.md) it scored 0.983, because guidance that
+reached support at the same instant as a complaint lost to the refund.
 
 ## How it goes wrong
 
@@ -202,6 +204,8 @@ container.
 ## Validation
 
 Measured on the 20 frozen seeds in [`eval/seeds.json`](eval/seeds.json) unless a row says otherwise.
+These figures predate the changes in [`CHANGES.md`](CHANGES.md), which lists the current ones and four further
+variants (`consent`, `sealed`, `busy`, `workday`).
 
 | Policy | Variant | Resolved | Mean reward |
 |---|---|---|---|
@@ -215,7 +219,9 @@ Measured on the 20 frozen seeds in [`eval/seeds.json`](eval/seeds.json) unless a
 ## Model runs
 
 One run per model on variant `linked`, seed 1308265273, high reasoning effort. Full records
-are in [`traces/`](traces).
+are in [`traces/`](traces). These runs were recorded before the changes in
+[`CHANGES.md`](CHANGES.md) (brief wording, support timing, graded score) and are not
+comparable with runs made after them.
 
 | Model | Reward | Resolved | Technical | Model calls |
 |---|---|---|---|---|
@@ -232,5 +238,6 @@ All three asked for every contract term at the start and wrote a correct fix.
   no customer. When the support hold ended at t=5, support refunded the only charge on four
   legitimate invoices. Fable held those four out of billing and handed the decision to the
   incident commander instead of charging the customers again, so four invoices ended unpaid
-  and the run is not resolved. The reference solution bills such invoices again and accepts
-  the recorded harm (reward 0.983 on this seed).
+  and the run is not resolved. The reference solution at the time billed such invoices
+  again and accepted the recorded harm (reward 0.983 on this seed). The brief then said
+  harmful recovery scores zero, which pointed the other way; that wording is now corrected.

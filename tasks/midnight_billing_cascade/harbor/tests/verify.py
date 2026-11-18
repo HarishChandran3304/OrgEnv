@@ -12,4 +12,4 @@ except Exception as exc:
 # This is the only scalar reward file. Details are explanatory, not a second score.
 Path('/logs/verifier/reward-details.json').write_text(json.dumps(result, indent=2, allow_nan=False))
 Path('/logs/verifier/reward.txt').write_text(format(result['reward'], '.12g') + '\n')
-print(json.dumps({k: result.get(k) for k in ('seed', 'variant', 'reward', 'resolved', 'checks', 'harm', 'error')}))
+print(json.dumps({k: result.get(k) for k in ('seed', 'variant', 'scorecard', 'reward', 'reward_graded', 'resolved', 'checks', 'harm', 'error')}))

@@ -35,7 +35,7 @@ def main():
         episode, rejected = replay(history, seed, variant)
         r = verify(episode)
         inc = episode.org.get_state()["resources"]["incident"]["state"]
-        print(json.dumps({"variant": variant, "reward": round(r["reward"], 3), "resolved": r["resolved"],
+        print(json.dumps({"variant": variant, "reward": round(r["reward"], 3), "reward_graded": round(r["reward_graded"], 3), "resolved": r["resolved"],
                           "breaches": r["safety_gates"]["reasons"], "harm": r["harm"]["events"],
                           "invoice_failures": len(r["invoice_failures"]), "audit_granted": inc["audit_grant"],
                           "pool_declines": inc.get("pool_declines", []), "newly_rejected": rejected[:6],

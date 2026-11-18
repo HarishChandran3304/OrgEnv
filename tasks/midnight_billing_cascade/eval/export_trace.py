@@ -38,20 +38,25 @@ def export(run: Path, out: Path):
         usage = meta.get("usage") or {}
         step = {"call": n, "reasoning_summary": reasoning(meta), "response": call.get("response"),
                 "validation": call.get("validation"),
-                "usage": {k: usage.get(k) for k in ("input_tokens", "output_tokens")}}
+                "usage": {k: usage.get(k) for k in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                                                    "cache_creation_input_tokens") if k in usage}}
         if call.get("validation") in ("valid", "tool_rejected", "invalid_decision"):
             step["result"] = next(results)["result"]
         elif "error_type" in call:
             step["error_type"] = call["error_type"]
         steps.append(step)
     first = rollout["decisions"][0]
+    prompt = [json.loads(line) for line in first["request"]["user"].split("\n")]
+    if len(prompt) == 1:  # runs recorded before the line-per-part layout: one JSON object
+        head, observation = prompt[0], prompt[0]["observation"]
+    else:
+        head, observation = prompt[0], prompt[-1]["observation"]
     settings = {k: v for k, v in (first.get("metadata") or {}).get("settings", {}).items()}
     trace = {"model": rollout["model"], "variant": job and job["variant"], "seed": job and int(job["seed"]),
              "reward": reward.get("reward"), "resolved": reward.get("resolved"),
              "stop_reason": rollout["stop_reason"], "totals": rollout["totals"], "settings": settings,
              "system_prompt": first["request"]["system"], "instruction": rollout["instruction"],
-             "first_observation": json.loads(first["request"]["user"])["observation"],
-             "tool_catalog": json.loads(first["request"]["user"])["catalog"], "steps": steps}
+             "first_observation": observation, "tool_catalog": head["catalog"], "steps": steps}
     out.mkdir(parents=True, exist_ok=True)
     (out / "trace.json").write_text(json.dumps(trace, indent=1))
     (out / "reward.json").write_text(json.dumps(reward, indent=1))

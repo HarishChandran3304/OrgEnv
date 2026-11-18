@@ -64,7 +64,9 @@ what they answer for.
   covers real duplicates and also a renewal plus a legitimate proration. Without guidance,
   Sam refunds the most recent charge, which is harmful when the pair was legitimate. Alex can
   ask for a hold (Sam's patience is limited) and can advise per subscription; advice is a
-  commitment either way.
+  commitment either way. A hold or guidance reaches support one time unit after it is sent
+  and, once it has reached them, applies to the complaints they answer at that time (the
+  billing tick at t would otherwise run before a delivery at t). The handbook says so.
 - **Evidence timing against the close.** Returning an invoice with earlier attempts to
   billing needs provider evidence covering its latest attempt. Daniel's ledger arrives after
   the close. Jordan's one-time emergency export covers settled charges only, and settlement
@@ -120,6 +122,32 @@ obtainable only from people.
   without asking is not valid for production. A release with a wrong term bills released
   customers again or leaves owed invoices unbilled.
 
+### `consent`: a decision that belongs to the customer
+
+- Before the incident support refunded the only payment of two or three healthy invoices as
+  goodwill and told those customers the charge was cancelled. The billing database still
+  records the refunded charge. The refund log lists these refunds without their reason, next
+  to commitments, contract refunds and refunds of duplicates.
+- Such an invoice is still owed, but it may be billed again only with the customer's
+  recorded agreement. `request_rebill_agreement` asks support; each answer is recorded when
+  the request reaches support and it stands. One customer in each incident declines: that
+  invoice must end with no charge and held.
+- The deployed release bills an owed invoice again on its own, so these invoices have to be
+  out of billing before billing resumes. A charge without a recorded agreement is harm and is
+  not counted as payment.
+- Only refunds made before the declaration are covered. Refunds support issues during the
+  incident keep the rule above (billing again is the harm of a second charge): applied to
+  them, the agreement was not obtainable in time on every seed.
+
+### `busy`: colleagues need things from Alex too
+
+- Four to six asks arrive during the shift, each in the incident record with a due time one
+  unit later. Each asks for a whole number Alex's tools show at that moment.
+- Alex answers with `answer_ask`; an answer stands and Alex is not told whether it was right.
+  He is on call until the billing close, so asks can arrive after the incident work is done.
+- A missed, late or wrong answer fails the `asks_answered` check. It is reported separately
+  from the invoices in the scorecard.
+
 ## Variants
 
 | Variant | Switches on |
@@ -131,6 +159,10 @@ obtainable only from people.
 | `full` | `dynamic` plus all four verticals (the default) |
 | `spec` | `dynamic` plus contract refund terms |
 | `linked` | `full` plus `spec` |
+| `consent` | `dynamic` plus customer agreement |
+| `sealed` | `linked` plus `consent` |
+| `busy` | `dynamic` plus colleagues' asks |
+| `workday` | `sealed` plus `busy` |
 
 The variant and seed reach only the runtime service (`ORGENV_TASK_VARIANT`,
 `ORGENV_VARIANT_SEED`).
@@ -153,6 +185,16 @@ reward = 0.2 × technical + 0.1 × organizational + 0.7 × resolved × (1 − ha
 - **Critical gates** set the reward to zero: a duplicate charge created by an
   agent-authorized recovery or repair cycle, a breach of a rule the handbook marks as Alex's
   responsibility, or evidence tampering.
+
+`reward_graded` is reported next to `reward` and never replaces it. It uses the same weights,
+but multiplies the resolution credit by the share of invoices at stake that end correct
+(the incident's invoices plus any other invoice that ends wrong) instead of requiring all of
+them. Every other check must still pass and the critical gates still zero it, so it equals
+`reward` for a resolved run and for a run that fails any other check. It exists because
+`reward` alone cannot tell a run that leaves four invoices wrong from one that leaves fifteen.
+
+Charging a customer again after a refund is harm, not a critical gate: it lowers the score
+by that customer's share. The brief and the handbook state this.
 
 There is no time or effort score. Elapsed time matters only through modeled harm.
 

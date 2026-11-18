@@ -24,7 +24,8 @@ import sys
 import tempfile
 import time
 
-from .model import DUE_STATES, PERIOD, Provider, broken_attempt, declined_now, params_of, rebill_owed, under_review
+from .model import (DUE_STATES, PERIOD, Provider, awaits_customer, broken_attempt, customer_agreed, declined_now, params_of,
+                    rebill_owed, under_review)
 
 ROOT = Path(__file__).parent / "service"
 FILE_NAMES = (
@@ -937,6 +938,7 @@ def run_production(files, prod: dict, now: float) -> dict:
 def apply_production_outcome(prod, job, outcome, now):
     before = {inv: len(Provider(prod["provider"]).net(inv)) for inv in prod["invoices"]}
     refunded_before = {c["invoice_id"] for c in Provider(prod["provider"]).charges if c["status"] == "refunded"}
+    waiting_before = {inv for inv in prod["invoices"] if awaits_customer(prod, inv)}  # consent
     prod["webhooks"]["delivered"] += len(job.get("events", []))
     prod["webhooks"]["queue"] = []
     prod["provider"] = deepcopy(outcome["provider"])
@@ -960,9 +962,12 @@ def apply_production_outcome(prod, job, outcome, now):
         if under_review(prod["params"], charge["merchant_id"], now):
             prod["harm"].append({"t": now, "kind": "charged_under_review", "invoice_id": inv,
                                  "subscription_id": info["subscription_id"], "charge_id": cid, "cause": "billing_cycle"})
-        if before.get(inv) == 0 and inv in refunded_before and not rebill_owed(prod, inv):
+        if before.get(inv) == 0 and inv in refunded_before and not rebill_owed(prod, inv) \
+                and not (inv in waiting_before and customer_agreed(prod, inv, now)):
             prod["harm"].append({"t": now, "kind": "charged_again_after_refund", "invoice_id": inv,
                                  "subscription_id": info["subscription_id"], "charge_id": cid, "cause": "rebill"})
+            if inv in waiting_before:  # consent: the customer never agreed, so this is not a payment
+                prod["unauthorized_rebills"].append(inv)
         if inv in before and before[inv] >= 1:
             duplicates.append(inv)
             prod["harm"].append({"t": now, "kind": "duplicate_charge", "invoice_id": inv,

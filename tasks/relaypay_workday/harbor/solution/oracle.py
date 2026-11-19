@@ -203,8 +203,10 @@ class DayWork:
             if sender == "daniel" and "legacy" in low and re.search(r"new (provider )?key|decommissioned", low) and "not mine" not in low:
                 self.confirmed.add("legacy_export")
             for sentence in re.split(r"\.(?=\s|$)|\n", low):
-                for dispute in re.findall(r"dp-[0-9]+", sentence):
-                    if sender == "sam" and re.search(r"refund|credit", sentence):
+                named = re.findall(r"dp-[0-9]+", sentence)
+                for dispute in named:
+                    # A sentence about one dispute is its answer; a summary of several only fills what is still unknown.
+                    if sender == "sam" and re.search(r"refund|credit", sentence) and (len(named) == 1 or dispute not in self.refunded):
                         self.refunded[dispute] = not re.search(r"\bnot\b|\bno\b|n't|never", sentence)
                     if sender == "maya" and "usage" in sentence:
                         ref = re.search(r"ul-[0-9]+", sentence)

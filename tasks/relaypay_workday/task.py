@@ -1,4 +1,4 @@
-"""Midnight Billing Cascade: server-owned organizational and production state.
+"""RelayPay Workday: server-owned organizational and production state.
 
 Transitions are module-level functions over an explicit environment so the
 verifier can re-execute exactly the same transition on signed ``state_before``.
@@ -21,6 +21,7 @@ from .day import (CONSUMERS, DAY_END, MERCHANT, PLANS, POLICIES as DAY_POLICIES,
                   cards, change_id, day_tick, generate_day, handoff_notes, in_freeze, initial_day)
 from .sandbox import (PROVIDER_CONTRACT, PUBLIC_DESCRIPTIONS, SPEC_CONTRACT, SPEC_PUBLIC_DESCRIPTIONS, WorkspaceError, canonical_workspace,
                       public_report, release_manifest, run_production, validate_workspace)
+from .record import Packer
 from .scoring import configuration
 from .variants import get_variant
 
@@ -1010,6 +1011,7 @@ class EpisodeV3:
         self.files = canonical_workspace()
         self.releases, self.validations = {}, {}
         self.calls, self.rejected_tools = [], []
+        self._packer = None
         self._build()
         self.org = TaskOrgEnv(self.task, max_actor_decisions_per_advance=24, max_actor_tools_per_advance=40)
         self.org.reset(seed)
@@ -1660,6 +1662,19 @@ class EpisodeV3:
                 "world": self.org.get_state(), "events": self.org.events, "messages": self.org.messages,
                 "files": deepcopy(self.files), "releases": deepcopy(self.releases), "validations": deepcopy(self.validations),
                 "calls": deepcopy(self.calls), "sim_time": self.now, "rejected_tools": list(self.rejected_tools),
+                **({"chat": self.talk.record()} if self.talk else {})}
+
+    def packed_evidence(self):
+        """The same record with events stored as changes (record.py). Only events added since the
+        last call are packed, so the runtime can sign and store the record after every tool call."""
+        if self._packer is None:
+            self._packer = Packer()
+        for event in self.org.raw_events()[len(self._packer.rows):]:
+            self._packer.add(event.to_dict())
+        return {"version": "3", "packed": True, "scoring": configuration(), "variant": self.variant.name, "seed": self.seed,
+                "world": self.org.get_state(), "events": self._packer.rows, "messages": self.org.messages,
+                "files": self.files, "releases": self.releases, "validations": self.validations,
+                "calls": self.calls, "sim_time": self.now, "rejected_tools": self.rejected_tools,
                 **({"chat": self.talk.record()} if self.talk else {})}
 
     def harm(self):

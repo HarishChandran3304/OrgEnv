@@ -51,7 +51,7 @@ def serve(state_dir=Path("/state"), port=8080):
 
     def persist():
         tmp = state_dir / "evidence.tmp"
-        tmp.write_text(json.dumps(seal(episode.evidence(), key), sort_keys=True, allow_nan=False))
+        tmp.write_text(json.dumps(seal(episode.packed_evidence(), key), sort_keys=True, allow_nan=False))
         tmp.chmod(0o600)
         tmp.replace(state_dir / "evidence.json")
     persist()

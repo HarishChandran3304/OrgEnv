@@ -4,14 +4,37 @@ The runtime, the agent and submitted code have no route off the task's internal 
 colleagues' words come from a model (ORGENV_CHAT_BACKEND=gateway), the runtime sends each
 prompt here over a network that only it and this gateway share, with a bearer token that only
 the two of them hold. The gateway holds the provider key, forwards the prompt and returns the
-text. It keeps no state about the task and never sees the verifier's key or the evidence.
+text. It holds none of the task's source, keeps no state about the task and never sees the
+verifier's key or the evidence.
 """
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import hmac
 import json
 import os
 
-from .chat import ChatUnavailable, anthropic_complete
+
+
+class ChatUnavailable(Exception):
+    pass
+
+
+def anthropic_complete(model, *, api_key, base_url=None, effort="low"):
+    """The same call as chat.anthropic_complete; repeated here so that this container holds no task source."""
+    import anthropic
+    base_url = base_url.rstrip("/").removesuffix("/v1") if base_url else None  # a relay address may end in /v1
+    client = anthropic.Anthropic(api_key=api_key, base_url=base_url, timeout=60.0, max_retries=2)
+
+    def complete(system, user, max_tokens):
+        try:
+            response = client.messages.create(model=model, max_tokens=max_tokens + 2000, system=system,
+                                              output_config={"effort": effort},
+                                              messages=[{"role": "user", "content": user}])
+        except anthropic.APIError as exc:
+            raise ChatUnavailable(type(exc).__name__) from None  # provider text can carry request data
+        if response.stop_reason == "refusal":
+            raise ChatUnavailable("refusal")
+        return "".join(block.text for block in response.content if block.type == "text")
+    return complete
 
 MAX_REQUEST_BYTES = 400_000
 MAX_CALLS = int(os.environ.get("ORGENV_CHAT_MAX_CALLS", "6000"))   # per run: a day needs a few hundred

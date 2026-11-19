@@ -10,7 +10,7 @@ BASE = "http://runtime:8080"
 def request(path, data=None):
     payload = None if data is None else json.dumps(data).encode()
     req = urllib.request.Request(BASE + path, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=600)  # colleagues' replies can take a while to be worded as response:
+    with urllib.request.urlopen(req, timeout=600) as response:  # colleagues' replies can take a while to be worded
         return json.load(response)
 
 

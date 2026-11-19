@@ -29,7 +29,7 @@ consequences, and is verified from recorded state instead of from what the agent
 
 ## The six dimensions, and how a task uses them
 
-The task in this repository, [Midnight Billing Cascade](tasks/midnight_billing_cascade), uses
+The first task in this repository, [Midnight Billing Cascade](tasks/midnight_billing_cascade), uses
 all six dimensions from that work.
 
 | Dimension | In the task |
@@ -49,6 +49,10 @@ all six dimensions from that work.
   on-call engineer has to contain a payment incident, repair the billing service, repair the
   affected invoices and resume billing. It comes packaged for Harbor, with a reference
   solution, controls and an independent verifier.
+- [`tasks/relaypay_workday/`](tasks/relaypay_workday): the second task, forked from the first.
+  An agent takes over the on-call rotation for a working day: the billing incident and four
+  more cards on one clock, handoff notes that are partly out of date, and colleagues who talk
+  in words worded by a language model while a seeded engine still decides what they do.
 - [`tasks/midnight_billing_cascade/traces/`](tasks/midnight_billing_cascade/traces): recorded
   runs of three frontier models.
 
@@ -144,4 +148,5 @@ orgenv/                         the framework
 examples/approval_workflow/     a minimal task
 tests/                          framework tests
 tasks/midnight_billing_cascade/ the first task: simulation, Harbor package, evaluation tools, traces
+tasks/relaypay_workday/         the second task: a working day on call, in words
 ```

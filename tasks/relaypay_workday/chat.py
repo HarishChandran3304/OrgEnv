@@ -359,7 +359,7 @@ def anthropic_complete(model, *, api_key, base_url=None, effort="low"):
 
 
 def gateway_complete(url, token):
-    """``complete`` over the chat gateway that sits next to the runtime (see chat_gateway.py)."""
+    """``complete`` over the chat gateway that sits next to the runtime (harbor/environment/gateway)."""
     def complete(system, user, max_tokens):
         body = json.dumps({"system": system, "user": user, "max_tokens": max_tokens}).encode()
         request = urllib.request.Request(url.rstrip("/") + "/complete", data=body, method="POST",

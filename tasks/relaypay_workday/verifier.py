@@ -23,6 +23,7 @@ from orgenv.core.tool_schema import validate_arguments
 from .model import (TICK_HORIZON, asks_summary, generate, harm_summary, incident_invoices, invoice_outcomes, ledger_snapshot,
                     replica_snapshot, stream, tick)
 from .sandbox import (canonical_workspace, hidden_report, public_report, run_production, technical_progress)
+from .record import unpack
 from .scoring import configuration, graded_reward, invoice_share, weighted_reward
 from .day import ITEMS, day_outcome, finish_day
 from .task import (CI_DURATION, HORIZON, OPERATIONS, EpisodeV3, obtained_evidence, on_tick, tool_budget)
@@ -236,6 +237,8 @@ def verify_envelope(envelope, key):
     try:
         data = envelope["payload"]
         _require(hmac.compare_digest(seal(data, key)["signature"], envelope["signature"]), "evidence signature mismatch")
+        if data.get("packed") is True:  # signed in compact form: rebuild the full record before verifying anything
+            data = {**{k: v for k, v in data.items() if k != "packed"}, "events": unpack(data["events"])}
         trusted_seed = data.get("seed") if type(data.get("seed")) is int else None
         _require(data.get("version") == "3" and data.get("scoring") == configuration(), "missing/mismatched signed scoring configuration")
         _require(type(data["seed"]) is int, "invalid seed")

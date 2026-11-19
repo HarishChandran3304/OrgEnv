@@ -26,7 +26,7 @@ from orgenv import ModelClientError
 SECRET_RE = re.compile(r"sk-[A-Za-z0-9_\-]{8,}|ABSK[A-Za-z0-9+/=]{16,}|bedrock-api-key-[A-Za-z0-9+/=_%\-]{16,}"
                        r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")
 
-MODEL_CALL_LIMIT = int(os.environ.get("ORGENV_TRIAL_MODEL_CALLS", "720"))  # a working day allows 600 tool calls
+MODEL_CALL_LIMIT = int(os.environ.get("ORGENV_TRIAL_MODEL_CALLS", "1440"))  # a working day allows 1200 tool calls
 API_RETRIES = 3          # per decision; transient provider failures are infrastructure, not model outcomes
 API_RETRY_BUDGET = 12    # per episode
 # Per-response output cap, reasoning included. It must never bind: GPT-6/6.1 stayed under

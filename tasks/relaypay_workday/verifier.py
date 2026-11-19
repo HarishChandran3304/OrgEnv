@@ -328,7 +328,7 @@ def verify_envelope(envelope, key):
         }
         day = {}
         if variant.board:
-            # The working day: the incident is one card of five. Each card is judged on its own outcome and
+            # The working day: the incident is one card of ten. Each card is judged on its own outcome and
             # the day's score is their average; reward and resolved below then speak for the whole day.
             cards = day_outcome(finish_day(world["day"]["state"], data["sim_time"], TICK_HORIZON))
             cards = {"incident": {"solved": resolved, "score": reward, "breaches": list(safety),

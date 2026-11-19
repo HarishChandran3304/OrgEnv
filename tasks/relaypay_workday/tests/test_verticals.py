@@ -5,7 +5,7 @@ Each vertical is an independent switch. ``dynamic`` keeps all four off;
 """
 import pytest
 
-from tasks.relaypay_workday.eval.controls import CONTROLS, VERTICAL
+from tasks.relaypay_workday.eval.controls import CONTROLS, DAY_CONTROLS, VERTICAL
 from tasks.relaypay_workday.eval.offline import load_oracle, run_oracle, transport, verify
 from tasks.relaypay_workday.model import generate, invoice_outcomes, replica_snapshot, tick, under_review
 from orgenv.core import Action
@@ -301,7 +301,8 @@ def test_planning_around_the_shown_calendar_fails_when_someone_is_late():
 # from the replica) does not do worse than the reference: measured, and reported as such.
 # refund_from_replica is measured over the frozen seeds in the validation run.
 # ask_owners_only only costs something when an account owner is back late.
-SEED_CONTROLS = sorted(set(CONTROLS) - {"trust_calendar", "trust_replica", "refund_from_replica", "ask_owners_only"})
+# The working day's controls each play a whole day: tests/test_day.py runs them with ORGENV_SLOW=1.
+SEED_CONTROLS = sorted(set(CONTROLS) - {"trust_calendar", "trust_replica", "refund_from_replica", "ask_owners_only"} - set(DAY_CONTROLS))
 
 
 @pytest.mark.parametrize("name", SEED_CONTROLS)

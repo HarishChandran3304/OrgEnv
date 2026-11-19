@@ -2,7 +2,7 @@
 
 python -m tasks.relaypay_workday.eval.sweep POLICY VARIANTS SEEDS [OUT]
   POLICY   oracle | a control name from tasks.relaypay_workday.eval.controls.CONTROLS
-  SEEDS    frozen | 2000-2059 | comma list
+  SEEDS    development | frozen | 2000-2059 | comma list
 """
 from __future__ import annotations
 
@@ -41,9 +41,9 @@ def one(job):
 
 
 def seeds_of(text):
-    if text == "frozen":
+    if text in ("frozen", "development"):
         s = json.loads((HERE / "seeds.json").read_text())
-        return s["development"] + s["unseen"]
+        return s["development"] + (s["unseen"] if text == "frozen" else [])
     if "-" in text:
         a, b = text.split("-")
         return list(range(int(a), int(b) + 1))
@@ -53,7 +53,7 @@ def seeds_of(text):
 def main():
     policy, variants, seeds = sys.argv[1], sys.argv[2].split(","), seeds_of(sys.argv[3])
     jobs = [(policy, v, s) for v in variants for s in seeds]
-    with Pool(12) as pool:
+    with Pool(min(10, len(jobs))) as pool:  # a day's run and its verification hold under 1 GB
         rows = pool.map(one, jobs)
     for v in variants:
         sub = [r for r in rows if r["variant"] == v]

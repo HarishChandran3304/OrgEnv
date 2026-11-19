@@ -17,7 +17,8 @@ HARBOR = ROOT / TASK / "harbor"
 
 def sources():
     found = [ROOT / "orgenv/__init__.py", ROOT / "orgenv/task.py", *sorted((ROOT / "orgenv/core").glob("*.py")),
-             *sorted((ROOT / TASK).glob("*.py")), *sorted((ROOT / TASK / "service").glob("*.py"))]
+             *sorted((ROOT / TASK).glob("*.py")), *sorted((ROOT / TASK / "cards").glob("*.py")),
+             *sorted((ROOT / TASK / "service").glob("*.py"))]
     return [p.relative_to(ROOT) for p in found]
 
 

@@ -27,6 +27,7 @@ import re
 import urllib.error
 import urllib.request
 
+from .day import TOPICS as DAY_TOPICS, scripted_asks
 from .model import stream
 
 
@@ -65,7 +66,7 @@ def persona(seed, actor):
 
 
 # --------------------------------------------------------------------------- facts
-_ID = r"\b(?:inv|sub|m|ask|dp|ul|rq|chg)-[A-Za-z0-9]+\b|\bch_[0-9]+\b|\b[0-9a-f]{8,64}\b"
+_ID = r"\b(?:inv|sub|m|ask|dp|ul|lx|rq|chg|gr|host|py|st|le|pl|er|cr)-[A-Za-z0-9]+\b|\bch_[0-9]+\b|\b[0-9a-f]{8,64}\b"
 _NUMBER = r"(?<![A-Za-z0-9_\-.])\d+(?:\.\d+)?(?![A-Za-z0-9_\-]|\.\d)"
 _TOOL = r"\b[a-z]+(?:_[a-z]+)+\b"
 _TERMS = ("primary", "secondary", "paused", "quarantined", "running", "rebill", "release", "legitimate", "duplicate")
@@ -100,12 +101,11 @@ def token_problems(source, rendering):
 
 # --------------------------------------------------------------------------- what a recipient can be asked
 HANDLES = {
-    "maya": ("request_pool_change", "request_contract_terms", "request_key_switch", "request_usage_proof", "request_price_terms"),
-    "jordan": ("request_emergency", "request_contract_terms"),
-    "sam": ("request_support_hold", "advise_support", "request_rebill_agreement", "request_contract_terms", "request_support_history",
-            "request_price_terms"),
-    "daniel": ("request_contract_terms", "request_key_switch", "request_price_terms"),
-    "nina": (), "priya": (),
+    "maya": ("request_pool_change", "request_contract_terms", "ask_colleague"),
+    "jordan": ("request_emergency", "request_contract_terms", "ask_colleague"),
+    "sam": ("request_support_hold", "advise_support", "request_rebill_agreement", "request_contract_terms", "ask_colleague"),
+    "daniel": ("request_contract_terms", "ask_colleague"),
+    "nina": ("ask_colleague",), "priya": ("ask_colleague",),
 }
 # What a person does whenever a message reaches them: it needs no request to be read out.
 ALWAYS = {
@@ -126,11 +126,9 @@ READS = {
                       "(a real duplicate: the incident will refund it)}. One entry per verdict.",
     "request_rebill_agreement": "contact customers and ask whether they agree to be billed again. args: {\"subscription_ids\": [\"sub-...\"]}",
     "request_contract_terms": "the contract refund term of a merchant account. args: {\"merchant_id\": \"m-...\"}. One entry per merchant.",
-    "request_key_switch": "move a consumer of the provider API to the new provider key, or say which key it uses. args: {\"consumer\": "
-                          "\"secondary\" (the secondary worker pool) | \"legacy_export\" (the legacy export job)}. One entry per consumer.",
-    "request_support_history": "what support has refunded or promised for the charges behind card disputes. args: {\"dispute_ids\": [\"dp-...\"]}",
-    "request_usage_proof": "usage logs for the charges behind card disputes. args: {\"dispute_ids\": [\"dp-...\"]}",
-    "request_price_terms": "what a merchant's signed contract amendment says about its prices (not its refund term). args: {\"merchant_id\": \"m-...\"}",
+    "ask_colleague": "something this colleague holds or does for one of the day's other cards. args: {\"topic\": <one of the topics below>, "
+                     "\"items\": [<what it is about, as the topic says; identifiers copied exactly>]}. One entry per topic. Topics: "
+                     + " | ".join(f"{topic}: {spec['about']}" for topic, (_, spec) in sorted(DAY_TOPICS.items())),
     "answer_ask": "Alex is answering a question this person asked him. args: {\"ask_id\": \"ask-...\", \"value\": <whole number>}",
 }
 
@@ -158,17 +156,7 @@ def scripted_read(recipient, text, open_asks):
                 intents.append({"op": "request_emergency", "args": {"kind": "stop_billing"}})
             if re.search(r"\b(export|audit)\b", s):
                 intents.append({"op": "request_emergency", "args": {"kind": "provider_audit"}})
-        if "request_key_switch" in handles and re.search(r"provider key|new key|old key|key rotation", s):
-            intents += [{"op": "request_key_switch", "args": {"consumer": c}}
-                        for c, word in (("secondary", "secondary"), ("legacy_export", "legacy")) if word in s]
-        disputes = list(dict.fromkeys(re.findall(r"\bdp-[0-9]+\b", s)))
-        if disputes and "request_support_history" in handles and re.search(r"support|refund|credit|promis", s):
-            intents.append({"op": "request_support_history", "args": {"dispute_ids": disputes}})
-        if disputes and "request_usage_proof" in handles and "usage" in s:
-            intents.append({"op": "request_usage_proof", "args": {"dispute_ids": disputes}})
-        if "request_price_terms" in handles and re.search(r"amendment|price", s):
-            intents += [{"op": "request_price_terms", "args": {"merchant_id": m}} for m in dict.fromkeys(re.findall(r"\bm-[a-z0-9]+\b", s))]
-        elif "request_contract_terms" in handles and ("contract" in s or "refund term" in s):
+        if "request_contract_terms" in handles and ("contract" in s or "refund term" in s) and not re.search(r"amendment|price|\bfee\b|\bbank\b", s):
             intents += [{"op": "request_contract_terms", "args": {"merchant_id": m}} for m in dict.fromkeys(re.findall(r"\bm-[a-z0-9]+\b", s))]
         if "request_support_hold" in handles:
             subs = list(dict.fromkeys(re.findall(r"\bsub-[0-9]+\b", s)))
@@ -184,6 +172,8 @@ def scripted_read(recipient, text, open_asks):
             number = re.search(_NUMBER, s)
             if number and "." not in number.group():
                 intents.append({"op": "answer_ask", "args": {"ask_id": open_asks[0]["ask_id"], "value": int(number.group())}})
+    if "ask_colleague" in handles:
+        intents += scripted_asks(text)
     return {"intents": intents, "unclear": ""}
 
 

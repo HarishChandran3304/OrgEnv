@@ -50,7 +50,7 @@ all six dimensions from that work.
   affected invoices and resume billing. It comes packaged for Harbor, with a reference
   solution, controls and an independent verifier.
 - [`tasks/relaypay_workday/`](tasks/relaypay_workday): the second task, forked from the first.
-  An agent takes over the on-call rotation for a working day: the billing incident and four
+  An agent takes over the on-call rotation for a working day: the billing incident and nine
   more cards on one clock, handoff notes that are partly out of date, and colleagues who talk
   in words worded by a language model while a seeded engine still decides what they do.
 - [`tasks/midnight_billing_cascade/traces/`](tasks/midnight_billing_cascade/traces): recorded

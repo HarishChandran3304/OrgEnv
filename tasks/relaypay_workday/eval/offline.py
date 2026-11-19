@@ -32,7 +32,7 @@ def transport(episode):
 
 
 def verify(episode):
-    return verify_envelope(seal(episode.evidence(), KEY), KEY)
+    return verify_envelope(seal(episode.packed_evidence(), KEY), KEY)  # the form the runtime signs
 
 
 def run_oracle(seed, variant="dynamic", log=None):

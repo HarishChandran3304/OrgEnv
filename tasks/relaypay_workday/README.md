@@ -176,6 +176,14 @@ Harbor's containers (reward 1.000, 220 tool calls).
 
 **With a model wording the replies.** The reference solution reads replies with fixed
 patterns, so it is guaranteed only with the engine's wording. With Claude Haiku 5.5 wording
-every message it was run on four seeds of `spoken` and one of `shift`, offline; see
-[`DESIGN.md`](DESIGN.md) for what that does and does not show. No evaluated-model run has been
-made on this task yet.
+every message it was also run:
+
+| Run | Seeds | Result |
+|---|---|---|
+| `spoken`, offline | 1308265273, 2000, 2001 | Solved all three, with the same rewards as with the engine's wording (1.000, 1.000, 0.991). |
+| `shift`, through Harbor with the gateway container | 1308265273 | Solved, 5 of 5 cards, reward 1.000. 38 messages worded, 3 fell back to the engine's wording, 131 model calls, 7 minutes. |
+
+Earlier attempts on these seeds failed until the reference's reading of free prose was made
+more tolerant (for example "agreed" for "agrees", or a summary sentence after a list). Those
+were faults in the reference's reading, not in what colleagues said; they show that reading
+the replies is real work. No evaluated-model run has been made on this task yet.

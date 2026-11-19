@@ -37,7 +37,7 @@ def control(name, seed, variant):
 
 
 def test_the_switch_is_off_everywhere_else_and_leaves_the_incident_itself_unchanged():
-    assert [name for name, v in VARIANTS.items() if v.consent] == ["consent", "sealed", "workday"]
+    assert [name for name, v in VARIANTS.items() if v.consent] == ["consent", "sealed", "workday", "spoken", "shift"]
     for variant, base in (("consent", "dynamic"), ("sealed", "linked")):
         world, plain = generate(SEED, variant), generate(SEED, base)
         assert world["invoices"] == plain["invoices"] and world["attempts"] == plain["attempts"]

@@ -43,7 +43,7 @@ def control(name, seed, variant):
 
 
 def test_the_switch_is_off_everywhere_else_and_leaves_the_incident_itself_unchanged():
-    assert [name for name, v in VARIANTS.items() if v.busy] == ["busy", "workday"]
+    assert [name for name, v in VARIANTS.items() if v.busy] == ["busy", "workday", "spoken", "shift"]
     for variant, base in (("busy", "dynamic"), ("workday", "sealed")):
         world, plain = generate(SEED, variant), generate(SEED, base)
         assert world["invoices"] == plain["invoices"] and world["attempts"] == plain["attempts"]

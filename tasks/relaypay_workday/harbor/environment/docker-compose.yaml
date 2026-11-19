@@ -1,0 +1,37 @@
+services:
+  main:
+    networks: [incident]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 96
+    depends_on:
+      runtime:
+        condition: service_healthy
+  runtime:
+    build:
+      context: ./runtime
+    networks: [incident]
+    environment:
+      ORGENV_SEED: ${ORGENV_VARIANT_SEED:-11}
+      ORGENV_VARIANT: ${ORGENV_TASK_VARIANT:-full}
+      PYTHONDONTWRITEBYTECODE: "1"
+    read_only: true
+    volumes:
+      - runtime-state:/state
+    tmpfs:
+      - /tmp:size=32m
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/catalog',timeout=2)"]
+      interval: 1s
+      timeout: 3s
+      retries: 20
+networks:
+  incident:
+    internal: true
+volumes:
+  runtime-state:

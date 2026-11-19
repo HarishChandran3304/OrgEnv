@@ -1,0 +1,8 @@
+FROM python:3.12-slim
+RUN pip install --no-cache-dir 'anthropic>=0.40'
+COPY vendor /opt/orgenv
+RUN useradd --uid 1000 gateway
+USER 1000
+WORKDIR /opt/orgenv
+ENV PYTHONPATH=/opt/orgenv PYTHONDONTWRITEBYTECODE=1
+CMD ["python", "-m", "tasks.relaypay_workday.chat_gateway"]

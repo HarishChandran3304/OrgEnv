@@ -9,6 +9,10 @@ vendor's own API; "bedrock": Amazon Bedrock; "relay": an OpenAI-compatible endpo
 RELAY_BASE_URL and RELAY_API_KEY), ORGENV_TRIAL_JOBS (Harbor job directory),
 ORGENV_TRIAL_AGENT_TIMEOUT_MULT (wall-clock only).
 
+Colleagues' words: ORGENV_CHAT_BACKEND=gateway makes a language model word what colleagues say and
+read what the agent writes (ORGENV_CHAT_MODEL, default claude-haiku-5-5; ORGENV_CHAT_API_KEY;
+ORGENV_CHAT_BASE_URL for a relay). Unset, colleagues use the engine's own wording.
+
 --repeat K runs every seed K times (job suffix -r1..-rK) so that reliability (pass^k, see
 reliability.py) can be reported next to the mean.
 """
@@ -19,6 +23,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -41,14 +46,16 @@ AGENT_TIMEOUT_MULT = float(os.environ.get("ORGENV_TRIAL_AGENT_TIMEOUT_MULT", "1"
 def run(model, variant, seed, repeat=None):
     name = f"{model}-{EFFORT or 'default'}-{variant}-{seed}" + (f"-r{repeat}" if repeat else "")
     env = {**os.environ, "ORGENV_VARIANT_SEED": str(seed), "ORGENV_TASK_VARIANT": variant, "PYTHONPATH": str(ROOT)}
+    if env.get("ORGENV_CHAT_BACKEND") == "gateway":  # colleagues' words come from a model: a fresh token for this run's gateway
+        env["ORGENV_CHAT_TOKEN"] = secrets.token_hex(24)
     cmd = ["harbor", "run", "-p", str(ROOT / "tasks/relaypay_workday/harbor"),
            "--agent-import-path", "tasks.relaypay_workday.eval.agent:TrialAgent", "-m", model, *(["--ak", f"effort={EFFORT}"] if EFFORT else []),  # "reasoning_effort" is a reserved Harbor agent option
            *(["--ak", f"provider={PROVIDER}"] if PROVIDER else []),
            *(["--agent-timeout-multiplier", str(AGENT_TIMEOUT_MULT)] if AGENT_TIMEOUT_MULT != 1 else []),
            "-o", str(JOBS), "--job-name", name, "-n", "1", "-r", "0", "-q"]
-    try:  # outlive Harbor's own agent timeout (7200 s x multiplier) so its verifier still runs
+    try:  # outlive Harbor's own agent timeout (28800 s x multiplier) so its verifier still runs
         proc = subprocess.run(["sg", "docker", "-c", " ".join(shlex.quote(c) for c in cmd)], env=env, cwd=ROOT,
-                              capture_output=True, text=True, timeout=7200 * AGENT_TIMEOUT_MULT + 3600)
+                              capture_output=True, text=True, timeout=28800 * AGENT_TIMEOUT_MULT + 3600)
         code = proc.returncode
     except subprocess.TimeoutExpired:
         code = "runner_timeout"

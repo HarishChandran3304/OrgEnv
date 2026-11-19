@@ -10,9 +10,9 @@ service = "runtime"
 
 [task]
 name = "orgenv/relaypay-workday"
-version = "3.0.0"
-description = "Contain a recurring-billing incident across worker pools you do not all control, repair interacting payment and event-handling defects, coordinate support and reconciliation, and resume billing without harming customers."
-keywords = ["organizational", "payments", "reconciliation", "incident", "idempotency"]
+version = "1.0.0"
+description = "Take over the on-call rotation at a payments company for a working day: a billing incident, a key rotation left half done, card disputes, a price change and approval requests, on one clock, with colleagues who talk in words and handoff notes that are partly out of date."
+keywords = ["organizational", "payments", "handoff", "working-day", "incident", "coordination"]
 
 [metadata]
 difficulty = "hard"
@@ -20,7 +20,7 @@ category = "software-engineering"
 tags = ["orgenv", "authorization", "idempotency", "dynamic"]
 
 [agent]
-timeout_sec = 7200
+timeout_sec = 28800
 user = "1000"
 
 [environment]

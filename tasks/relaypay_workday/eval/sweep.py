@@ -36,6 +36,7 @@ def one(job):
             "critical": r["safety_gates"]["reasons"], "harm_rate": harm.get("harm_rate"), "harm_events": harm.get("events"),
             "failed_checks": [k for k, v in r.get("checks", {}).items() if not v],
             "invoice_failures": len(r.get("invoice_failures") or {}), "tool_calls": len(episode.calls), "sim_time": episode.now,
+            "cards": (r.get("scorecard") or {}).get("cards_detail"),
             "policy_error": error, "verifier_error": r.get("error")}
 
 
@@ -63,6 +64,9 @@ def main():
         harm = sum((r["harm_rate"] or 0) for r in sub) / n
         print(f"{policy:28s} {v:14s} n={n:3d} resolved={resolved:3d} critical={zero:3d} mean_reward={mean:.3f} mean_graded={sum((r["reward_graded"] or 0) for r in sub) / n:.3f} mean_harm={harm:.3f} "
               f"min_reward={min(r['reward'] for r in sub):.3f} max_calls={max(r['tool_calls'] for r in sub)}")
+        if sub[0].get("cards"):  # a working day: how each card went
+            print("   " + "  ".join(f"{card} {sum(r['cards'][card]['solved'] for r in sub)}/{n} ({sum(r['cards'][card]['score'] for r in sub) / n:.2f})"
+                                    for card in sub[0]["cards"]))
         for r in sub:
             if (policy == "oracle" and not r["resolved"]) or r["verifier_error"]:
                 print("   !!", json.dumps(r)[:600])

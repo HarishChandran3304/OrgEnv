@@ -178,6 +178,7 @@ class DayWork:
     follow_amendment = True        # take up a change to the amendment when the owner reports it
     judge_requests = True          # decide on-call requests by the handbook (False: approve whoever asks)
     work_day = True
+    stay = True                    # stay for the rest of the shift once the incident is closed
 
     def __init__(self, oracle):
         self.o = oracle
@@ -341,7 +342,7 @@ class DayWork:
 
     def finish(self):
         """Stay for the rest of the shift: cards fall due and requests arrive until it ends."""
-        if not self.work_day or not self.board:
+        if not self.work_day or not self.board or not self.stay:
             return
         o = self.o
         for _ in range(60):

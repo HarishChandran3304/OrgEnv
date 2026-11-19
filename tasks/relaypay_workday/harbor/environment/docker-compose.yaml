@@ -10,11 +10,18 @@ services:
   runtime:
     build:
       context: ./runtime
-    networks: [incident]
+    networks: [incident, backstage]
     environment:
       ORGENV_SEED: ${ORGENV_VARIANT_SEED:-11}
-      ORGENV_VARIANT: ${ORGENV_TASK_VARIANT:-full}
+      ORGENV_VARIANT: ${ORGENV_TASK_VARIANT:-shift}
+      # Who words what colleagues say: "scripted" (no model) or "gateway" (the chat service below).
+      ORGENV_CHAT_BACKEND: ${ORGENV_CHAT_BACKEND:-scripted}
+      ORGENV_CHAT_URL: http://chat:8090
+      ORGENV_CHAT_TOKEN: ${ORGENV_CHAT_TOKEN:-}
       PYTHONDONTWRITEBYTECODE: "1"
+    depends_on:
+      chat:
+        condition: service_healthy
     read_only: true
     volumes:
       - runtime-state:/state
@@ -30,8 +37,35 @@ services:
       interval: 1s
       timeout: 3s
       retries: 20
+  # The only service with a route out: it forwards the runtime's prompts to the language model
+  # that words colleagues' messages. It shares a network with the runtime alone, not with the agent.
+  chat:
+    build:
+      context: ./runtime
+      dockerfile: Dockerfile.gateway
+    networks: [backstage, outside]
+    environment:
+      ORGENV_CHAT_MODEL: ${ORGENV_CHAT_MODEL:-claude-haiku-5-5}
+      ORGENV_CHAT_API_KEY: ${ORGENV_CHAT_API_KEY:-}
+      ORGENV_CHAT_BASE_URL: ${ORGENV_CHAT_BASE_URL:-}
+      ORGENV_CHAT_TOKEN: ${ORGENV_CHAT_TOKEN:-}
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health',timeout=2)"]
+      interval: 1s
+      timeout: 3s
+      retries: 20
 networks:
   incident:
     internal: true
+  backstage:
+    internal: true
+  outside: {}
 volumes:
   runtime-state:

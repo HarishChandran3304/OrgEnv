@@ -10,6 +10,7 @@ from pathlib import Path
 import secrets
 import socket
 
+from .chat import backend_from_environment
 from .task import EpisodeV3
 from .verifier import seal
 
@@ -44,7 +45,8 @@ def serve(state_dir=Path("/state"), port=8080):
     key_path = state_dir / "verifier-key"
     key_path.write_bytes(key)
     key_path.chmod(0o600)
-    episode = EpisodeV3(int(os.environ.get("ORGENV_SEED", "11")), variant=os.environ.get("ORGENV_VARIANT", "dynamic"))
+    episode = EpisodeV3(int(os.environ.get("ORGENV_SEED", "11")), variant=os.environ.get("ORGENV_VARIANT", "shift"),
+                        chat_backend=backend_from_environment())
     local = _local_addresses()
 
     def persist():

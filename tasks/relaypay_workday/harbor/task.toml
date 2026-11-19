@@ -1,0 +1,50 @@
+schema_version = "1.4"
+
+[[artifacts]]
+source = "/state/evidence.json"
+service = "runtime"
+
+[[artifacts]]
+source = "/state/verifier-key"
+service = "runtime"
+
+[task]
+name = "orgenv/relaypay-workday"
+version = "1.0.0"
+description = "Take over the on-call rotation at a payments company for a working day: a billing incident and nine more cards (key rotation, disputes, a price change, approvals and access, settlement reconciliation, data erasure, a maintenance window, a held payout, audit evidence), on one clock, with colleagues who talk in words and handoff notes that are partly out of date."
+keywords = ["organizational", "payments", "handoff", "working-day", "incident", "coordination"]
+
+[metadata]
+difficulty = "hard"
+category = "software-engineering"
+tags = ["orgenv", "authorization", "idempotency", "dynamic"]
+
+[agent]
+timeout_sec = 28800
+user = "1000"
+
+[environment]
+build_timeout_sec = 600
+network_mode = "no-network"
+cpus = 1
+memory_mb = 768
+storage_mb = 2048
+workdir = "/workspace"
+
+[environment.healthcheck]
+command = "orgenvctl catalog >/dev/null"
+interval_sec = 1
+timeout_sec = 5
+retries = 15
+
+[verifier]
+timeout_sec = 1800
+environment_mode = "separate"
+network_mode = "no-network"
+
+[verifier.environment]
+network_mode = "no-network"
+build_timeout_sec = 600
+cpus = 1
+memory_mb = 8192
+storage_mb = 4096

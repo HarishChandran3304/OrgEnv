@@ -67,7 +67,8 @@ class Spoken:
     it is best effort (identifiers and numbers always survive, phrasing does not).
     """
     REQUESTS = ("request_pool_change", "request_emergency", "request_support_hold", "advise_support",
-                "request_contract_terms", "request_rebill_agreement", "answer_ask")
+                "request_contract_terms", "request_rebill_agreement", "answer_ask",
+                "request_key_switch", "request_support_history", "request_usage_proof", "request_price_terms")
 
     def __init__(self):
         self.read_upto = 0
@@ -98,6 +99,16 @@ class Spoken:
             return args["recipient"], f"What is the contract refund term for merchant account {args['merchant_id']}?"
         if tool == "request_rebill_agreement":
             return "sam", f"Sam, please ask the customers of {subs} whether they agree to be billed again for the payment support refunded."
+        if tool == "request_key_switch":
+            name = "the secondary worker pool" if args["consumer"] == "secondary" else "the legacy export job"
+            return args["recipient"], f"Is {name} on the new provider key? If it still uses the old one, please switch it now."
+        if tool == "request_support_history":
+            return "sam", f"Sam, for the disputes {', '.join(args['dispute_ids'])}: has support refunded or credited any of these charges?"
+        if tool == "request_usage_proof":
+            return "maya", (f"Maya, I need the usage logs for the disputes {', '.join(args['dispute_ids'])}: did each customer use the "
+                            "service after the charge?")
+        if tool == "request_price_terms":
+            return args["recipient"], f"What does the signed amendment for {args['merchant_id']} say about its prices this cycle?"
         ask = self.asks[args["ask_id"]]
         return ask["from"], f"The answer to your question is {args['value']}."
 
@@ -154,7 +165,194 @@ class Spoken:
         return obs
 
 
+class DayWork:
+    """The other cards of the working day, worked between the steps of the incident.
+
+    Riley's notes are a starting point, never evidence: every fact a card turns on is asked of
+    the person who holds it, and nothing irreversible is done on a note alone.
+    """
+    # Strategy hooks (controls change one of them).
+    trust_notes_rotation = False   # revoke on Riley's word that the other consumers are done
+    trust_notes_disputes = False   # submit Riley's recommendations as they stand
+    trust_draft_prices = False     # apply Riley's draft without asking the account owner
+    follow_amendment = True        # take up a change to the amendment when the owner reports it
+    judge_requests = True          # decide on-call requests by the handbook (False: approve whoever asks)
+    work_day = True
+
+    def __init__(self, oracle):
+        self.o = oracle
+        self.board = None
+        self.seen = 0
+        self.asked = set()
+        self.confirmed = set()      # consumers whose owner has said they are on the new key or gone
+        self.refunded, self.usage = {}, {}
+        self.terms, self.amended_seen, self.terms_asked_at = None, False, None
+        self.reviewed = {}          # price change id prefix -> approved?
+        self.sent_for_review = None
+        self.done = set()
+
+    def read(self, obs):
+        for message in obs.get("inbox", [])[self.seen:]:
+            sender, low = message["sender_id"], message["content"].lower()
+            if message["message_id"] == "note-pricing" or ("amendment" in low and "next cycle" in low):
+                self.amended_seen = True
+                continue
+            if sender == "maya" and "secondary" in low and re.search(r"new (provider )?key", low) and "not mine" not in low:
+                self.confirmed.add("secondary")
+            if sender == "daniel" and "legacy" in low and re.search(r"new (provider )?key|decommissioned", low) and "not mine" not in low:
+                self.confirmed.add("legacy_export")
+            for sentence in re.split(r"\.(?=\s|$)|\n", low):
+                for dispute in re.findall(r"dp-[0-9]+", sentence):
+                    if sender == "sam" and re.search(r"refund|credit", sentence):
+                        self.refunded[dispute] = not re.search(r"\bnot\b|\bno\b|n't|never", sentence)
+                    if sender == "maya" and "usage" in sentence:
+                        ref = re.search(r"ul-[0-9]+", sentence)
+                        self.usage[dispute] = ref.group() if ref else None
+            prices = dict(re.findall(r"\b(basic|pro|team)\b\D{0,12}?(\d{3,6})", low))
+            if "amendment" in low and len(prices) == 3 and (self.terms_asked_at is None or message["sent_at"] > self.terms_asked_at):
+                self.terms = {"prices": {plan: int(cents) for plan, cents in prices.items()},
+                              "exceptions": sorted(set(re.findall(r"sub-[0-9]{5}", low)))}
+            if sender == "nina" and "price change" in low:
+                for prefix in re.findall(r"\b[0-9a-f]{12}\b", low):
+                    self.reviewed[prefix] = "safe to apply" in low and not re.search(r"not approved|not safe|unsafe", low)
+        self.seen = len(obs.get("inbox", []))
+
+    def once(self, key):
+        fresh = key not in self.asked
+        self.asked.add(key)
+        return fresh
+
+    def step(self):
+        o = self.o
+        if not self.work_day or self.board is False:
+            return
+        if self.board is None:
+            if "board" not in o.request("/catalog"):
+                self.board = False
+                return
+            self.board = o.call("board")["result"]
+        obs = o.observe()
+        now = o.now(obs)
+        close = obs["resources"]["incident"]["state"].get("billing_close_at") or 0
+        if "from_colleagues" in self.board and not self.amended_seen and now >= 13:  # no chat: what colleagues send is on the board
+            self.amended_seen = any(p["ping_id"] == "note-pricing" for p in o.call("board")["result"]["from_colleagues"])
+        self.read(obs)
+        self.rotation(now, close)
+        self.disputes(now)
+        self.pricing(now)
+        self.approvals(now)
+
+    def rotation(self, now, close):
+        o = self.o
+        if "rotation" in self.done:
+            return
+        frozen = abs(now - close) <= 1.0
+        status = o.call("key_status")["result"]
+        if status["old_key"] != "active":
+            self.done.add("rotation")
+            return
+        if status["consumers"]["primary"]["key"] == "old" and not frozen:
+            o.call("switch_key", {"consumer": "primary"})
+            status["consumers"]["primary"]["key"] = "new"
+        if self.trust_notes_rotation:
+            self.confirmed |= {"secondary", "legacy_export"}
+        elif self.once("keys"):
+            o.call("request_key_switch", {"recipient": "maya", "consumer": "secondary"})
+            o.call("request_key_switch", {"recipient": "daniel", "consumer": "legacy_export"})
+        mine = all(c["key"] == "new" for c in status["consumers"].values() if c["owner"].startswith("on-call"))
+        if mine and {"secondary", "legacy_export"} <= self.confirmed and not frozen and now <= status["revoke_due_at"]:
+            o.call("revoke_old_key")
+            o.note("old_key_revoked", at=now)
+            self.done.add("rotation")
+
+    def disputes(self, now):
+        o = self.o
+        if "disputes" in self.done:
+            return
+        queue = o.call("dispute_queue")["result"]
+        open_ids = [d["dispute_id"] for d in queue["disputes"] if not d["answer"]]
+        if not open_ids or now > queue["respond_by"]:
+            self.done.add("disputes")
+            return
+        if self.trust_notes_disputes:
+            noted = dict(re.findall(r"(dp-[0-9]+) (contest|accept)", self.board["handoff_notes"]))
+            for dispute in open_ids:  # Riley had no usage references: a contest cites the dispute itself
+                o.call("respond_dispute", {"dispute_id": dispute, "response": noted[dispute],
+                                           **({"usage_ref": "ul-0000"} if noted[dispute] == "contest" else {})})
+            self.done.add("disputes")
+            return
+        if self.once("disputes"):
+            o.call("request_support_history", {"dispute_ids": open_ids})
+            o.call("request_usage_proof", {"dispute_ids": open_ids})
+        known = [d for d in open_ids if d in self.refunded and d in self.usage]
+        last_chance = now + 1 > queue["respond_by"]
+        for dispute in open_ids if last_chance else known:
+            contest = self.usage.get(dispute) and self.refunded.get(dispute) is False  # proof of use, and no refund
+            o.call("respond_dispute", {"dispute_id": dispute, "response": "contest" if contest else "accept",
+                                       **({"usage_ref": self.usage[dispute]} if contest else {})})
+        if last_chance or len(known) == len(open_ids):
+            o.note("disputes_answered", at=now)
+            self.done.add("disputes")
+
+    def pricing(self, now):
+        o = self.o
+        if "pricing" in self.done:
+            return
+        table = o.call("price_table")["result"]
+        if table["batch"] is not None:
+            self.done.add("pricing")
+            return
+        if self.trust_draft_prices:
+            self.terms = table["riley_draft"]
+        else:
+            if self.amended_seen and self.follow_amendment and self.once("terms-after-amendment"):
+                self.terms, self.terms_asked_at = None, now  # the amendment changed: what I was told before is void
+                o.call("request_price_terms", {"recipient": table["account_owner"], "merchant_id": table["merchant_id"]})
+            if self.terms is None and self.once("terms"):
+                self.terms_asked_at = now
+                o.call("request_price_terms", {"recipient": table["account_owner"], "merchant_id": table["merchant_id"]})
+        if self.terms is None:
+            return
+        wanted = {"prices": self.terms["prices"], "exceptions": sorted(self.terms["exceptions"])}
+        same = lambda change: change and change["prices"] == wanted["prices"] and sorted(change["exceptions"]) == wanted["exceptions"]
+        if same(table["in_force"]):
+            return
+        if not same(table["submitted"]):
+            table["submitted"] = {"change_id": o.call("submit_price_change", wanted) and o.call("price_table")["result"]["submitted"]["change_id"],
+                                  **wanted}
+        change = table["submitted"]["change_id"]
+        if self.reviewed.get(change[:12]):
+            o.call("apply_price_change")
+            o.note("price_change_applied", at=now, prices=wanted["prices"])
+        elif self.sent_for_review != change:
+            self.sent_for_review = change
+            o.call("send_message", {"recipient": "nina", "content": f"Nina, please review the submitted price change for {table['merchant_id']}."})
+
+    def approvals(self, now):
+        o = self.o
+        for row in o.call("oncall_queue")["result"]["requests"]:
+            if row["decision"] or now > row["due_at"]:
+                continue
+            if "change" in row:
+                ok = row["change"]["tests"] == "passed" and row["change"]["reviewer"] != row["change"]["author"]
+            else:
+                ok = row["access"]["mode"] == "read" and row["access"]["duration"] <= 8
+            o.call("decide_request", {"request_id": row["request_id"], "decision": "approve" if ok or not self.judge_requests else "decline"})
+
+    def finish(self):
+        """Stay for the rest of the shift: cards fall due and requests arrive until it ends."""
+        if not self.work_day or not self.board:
+            return
+        o = self.o
+        for _ in range(60):
+            if o.now(o.observe()) >= self.board["shift_ends_at"]:
+                return
+            o.wait(1.0)
+
+
 class AdaptiveOracle:
+    Day = DayWork
+
     # Strategy hooks (the reference workflow uses the adaptive defaults).
     contain_first = True        # pause billing before doing anything else
     containment_delay = 0.0     # extra investigation time before a late pause
@@ -195,6 +393,8 @@ class AdaptiveOracle:
     def __init__(self, request, log=None, max_steps=60):
         self.request = request
         self._spoken = None        # whether colleagues talk in words here (decided on first use)
+        self._busy = False
+        self.day = self.Day(self)
         self.log = log or (lambda _: None)
         self.max_steps = max_steps
         self.journal = {}          # invoice -> latest known attempt time (all journals seen)
@@ -266,8 +466,13 @@ class AdaptiveOracle:
         self.log({"policy_version": POLICY_VERSION, "tool": tool, "args": args or {}, "result": result})
         if expect_ok and not result.get("ok"):
             raise OracleError(f"{tool} failed: {json.dumps(result, sort_keys=True)[:400]}")
-        if tool in ("advance_time", "run_tests") and result.get("ok"):
-            self.handle_asks()  # time has moved: a colleague may have asked for something, due one unit on
+        if tool in ("advance_time", "run_tests") and result.get("ok") and not self._busy:
+            self._busy = True
+            try:
+                self.handle_asks()  # time has moved: a colleague may have asked for something, due one unit on
+                self.day.step()     # and the day's other cards may have moved
+            finally:
+                self._busy = False
         return result
 
     def handle_asks(self):
@@ -318,6 +523,7 @@ class AdaptiveOracle:
             if not getattr(self, "_leaving", False):
                 self._leaving = True
                 self.stay_on_call()
+                self.day.finish()
 
     def note(self, decision, **why):
         self.decisions.append({"decision": decision, **why})

@@ -32,6 +32,11 @@ that moment, and Alex stays on call until the billing close. ``busy`` turns only
 colleagues answer in their own voice. Decisions other people make reach him only through what
 they say. The engine decides exactly as before (see chat.py). ``chat`` turns only that on;
 ``spoken`` is ``workday`` plus ``chat``.
+
+``board``: the incident is one card of a working day. Alex takes over the on-call rotation
+from a colleague who has left it, with a board of four more cards and handoff notes that are
+partly out of date (see day.py). The cards share the incident's clock and people. ``board``
+turns only that on; ``shift`` is ``spoken`` plus ``board``: the whole day, in words.
 """
 from dataclasses import dataclass
 
@@ -50,6 +55,7 @@ class Variant:
     consent: bool = False
     busy: bool = False
     chat: bool = False
+    board: bool = False
 
 
 VERTICALS = ("discretion", "incentives", "noise", "drift")
@@ -73,6 +79,8 @@ VARIANTS = {
     "workday": _dynamic("workday", *VERTICALS, "spec", "consent", "busy"),
     "chat": _dynamic("chat", "chat"),
     "spoken": _dynamic("spoken", *VERTICALS, "spec", "consent", "busy", "chat"),
+    "board": _dynamic("board", "board"),
+    "shift": _dynamic("shift", *VERTICALS, "spec", "consent", "busy", "chat", "board"),
 }
 
 

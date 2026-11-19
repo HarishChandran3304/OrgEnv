@@ -24,7 +24,8 @@ from .model import (TICK_HORIZON, asks_summary, generate, harm_summary, incident
                     replica_snapshot, stream, tick)
 from .sandbox import (canonical_workspace, hidden_report, public_report, run_production, technical_progress)
 from .scoring import configuration, graded_reward, invoice_share, weighted_reward
-from .task import (CI_DURATION, HORIZON, OPERATIONS, TOOL_BUDGET, EpisodeV3, obtained_evidence, on_tick)
+from .day import ITEMS, day_outcome, finish_day
+from .task import (CI_DURATION, HORIZON, OPERATIONS, EpisodeV3, obtained_evidence, on_tick, tool_budget)
 from .variants import get_variant
 
 CHECKS = ("payment_retry_behavior", "deployed_release_validated", "release_authorization", "evidence_provenance",
@@ -180,7 +181,7 @@ def _audit(data, env):
             else:
                 _require(got == after, f"state-after mismatch at event {event['sequence']} ({op})")
             deployments += op == "deploy_release"
-            approvals += op == "approve_release"
+            approvals += op == "approve_release" or (op == "attend" and action["payload"].get("then") == "approve_release")
         elif kind == "scheduled" and event.get("event_type") == "billing_tick" and outcome == "succeeded":
             w = WorldState.from_dict(before)
             ctx = _Ctx(event.get("random_samples", []))
@@ -246,7 +247,7 @@ def verify_envelope(envelope, key):
         _require(all(events[k]["sim_time"] <= events[k + 1]["sim_time"] for k in range(len(events) - 1)), "event time regressed")
         _require(events[0]["action"] == {"actor_id": "system", "operation": "initialize_incident", "payload": {}}
                  and events[0]["outcome"] == "succeeded", "missing initialization record")
-        _require(len(data["calls"]) <= TOOL_BUDGET, "tool budget exceeded")
+        _require(len(data["calls"]) <= tool_budget(variant), "tool budget exceeded")
         replay = EpisodeV3(data["seed"], variant=variant.name, initialize=False)
         catalog = replay.catalog()
         elapsed = 0.0
@@ -322,8 +323,23 @@ def verify_envelope(envelope, key):
             "asks_answered": asked["answered_correctly_on_time"], "asks": asked["asks"],
             "code_groups_passed": sum(bool(v) for v in submitted.values()), "code_groups": len(submitted),
         }
+        day = {}
+        if variant.board:
+            # The working day: the incident is one card of five. Each card is judged on its own outcome and
+            # the day's score is their average; reward and resolved below then speak for the whole day.
+            cards = day_outcome(finish_day(world["day"]["state"], data["sim_time"], TICK_HORIZON))
+            cards = {"incident": {"solved": resolved, "score": reward, "breaches": list(safety),
+                                  "detail": {"reward_graded": graded, "completion": scorecard["completion"]}}, **cards}
+            day = {"cards": cards, "incident_reward": reward, "incident_reward_graded": graded, "incident_resolved": resolved}
+            scorecard.update(cards_solved=sum(c["solved"] for c in cards.values()), cards=len(cards),
+                             cards_detail={name: {"solved": c["solved"], "score": round(c["score"], 6)} for name, c in cards.items()},
+                             rules_broken=sum(len(c["breaches"]) for c in cards.values()))
+            reward = round(sum(c["score"] for c in cards.values()) / len(cards), 12)
+            graded = round((graded + sum(cards[name]["score"] for name in ITEMS)) / len(cards), 12)
+            resolved = all(c["solved"] for c in cards.values())
+            scorecard["solved"] = resolved
         return {**configuration(), "seed": data["seed"], "variant": variant.name, "scorecard": scorecard,
-                "reward": reward, "reward_graded": graded, "resolved": resolved,
+                "reward": reward, "reward_graded": graded, "resolved": resolved, **({"day": day} if day else {}),
                 "checks": checks,
                 "components": {"technical_progress": technical, "organizational_progress": organizational,
                                "resolved": float(resolved), "resolved_unharmed": float(resolved) * (1 - harm["harm_rate"]),
